@@ -1,0 +1,30 @@
+# Streamlit UI framework
+streamlit==1.36.0
+streamlit-authenticator==0.3.2
+
+# Data processing
+pandas==2.2.2
+numpy==1.26.4
+openpyxl==3.1.5
+pyarrow==16.1.0
+
+# Machine learning (RFM segmentation)
+scikit-learn==1.5.0
+
+# Storage
+SQLAlchemy==2.0.31
+
+# Charts (Streamlit's default is Altair; keep Plotly optional for richer views)
+plotly==5.22.0
+
+# Configuration and secrets
+python-dotenv==1.0.1
+
+# Cryptography (HMAC pseudonymization keys)
+cryptography==42.0.8
+
+# Testing and quality
+pytest==8.2.2
+pytest-cov==5.0.0
+flake8==7.1.0
+black==24.4.2
