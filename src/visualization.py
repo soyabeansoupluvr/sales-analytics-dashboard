@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import pandas as pd
-    import plotly.graph_objects as go
+#   import plotly.graph_objects as go
 
 
 def revenue_by_month(frame: "pd.DataFrame"):

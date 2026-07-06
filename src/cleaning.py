@@ -54,15 +54,15 @@ _EXPECTED_COLUMNS: Final[tuple[str, ...]] = (
 
 _NON_PRODUCT_CODES: Final[frozenset[str]] = frozenset(
     {
-        "POST",         # Postage
-        "DOT",          # Dotcom postage
-        "M",            # Manual adjustment
-        "BANK CHARGES", # Bank charges
-        "AMAZONFEE",    # Amazon fee
-        "CRUK",         # Charity item
-        "PADS",         # Packaging materials
-        "S",            # Sample
-        "D",            # Discount
+        "POST",          # Postage
+        "DOT",           # Dotcom postage
+        "M",             # Manual adjustment
+        "BANK CHARGES",  # Bank charges
+        "AMAZONFEE",     # Amazon fee
+        "CRUK",          # Charity item
+        "PADS",          # Packaging materials
+        "S",             # Sample
+        "D",             # Discount
     }
 )
 
