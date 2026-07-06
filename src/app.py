@@ -11,8 +11,8 @@ Course: MSIT 5290 Capstone, University of the People (2026)
 """
 from __future__ import annotations
 
-import os
-from pathlib import Path
+# import os
+# from pathlib import Path
 
 import streamlit as st
 from dotenv import load_dotenv
