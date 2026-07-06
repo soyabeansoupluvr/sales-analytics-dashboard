@@ -145,7 +145,3 @@ MIT — see [`LICENSE`](LICENSE).
 ## Author
 
 Rev. Drew Brown — MSIT 5290 Capstone, University of the People, July 2026.
-<<<<<<< HEAD
-=======
-
->>>>>>> 22fba0a9b92e95ce92f69c250e1d7eca90ceb648
