@@ -1,5 +1,4 @@
-# sales-analytics-dashboard
-Interactive Sales Analytics Dashboard for Small Businesses
+# Interactive Sales Analytics Dashboard for Small Businesses
 
 A Python/Streamlit decision-support prototype that ingests retail transaction
 data from the [UCI Online Retail dataset](https://archive.ics.uci.edu/dataset/352/online+retail),
@@ -73,6 +72,8 @@ sales-analytics-dashboard/
 ├── .env.example
 ├── .gitignore
 ├── requirements.txt
+├── requirements-dev.txt
+├── pyproject.toml
 ├── LICENSE
 └── README.md
 ```
@@ -90,7 +91,8 @@ source venv/bin/activate      # Linux / macOS
 # venv\Scripts\activate       # Windows
 
 # 3. Install
-pip install -r requirements.txt
+pip install -r requirements.txt          # runtime only
+# pip install -r requirements-dev.txt   # for tests, lint, and formatter
 
 # 4. Configuration and secrets
 cp .env.example .env
