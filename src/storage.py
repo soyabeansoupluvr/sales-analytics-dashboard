@@ -4,6 +4,7 @@ Persists the cleaned, pseudonymized frame as encrypted parquet snapshots and
 serves role-scoped SQLite views to the analytics layer. Every read is
 brokered by M8 Access Control so raw identifiers never leave this module.
 """
+
 from __future__ import annotations
 
 from pathlib import Path

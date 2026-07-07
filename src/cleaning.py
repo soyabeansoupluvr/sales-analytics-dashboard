@@ -22,6 +22,7 @@ Design notes:
   identifiers, invalid dates, and unmatched returns, are recorded in the
   CleaningReport instead of raising exceptions.
 """
+
 from __future__ import annotations
 
 import math
@@ -54,15 +55,15 @@ _EXPECTED_COLUMNS: Final[tuple[str, ...]] = (
 
 _NON_PRODUCT_CODES: Final[frozenset[str]] = frozenset(
     {
-        "POST",          # Postage
-        "DOT",           # Dotcom postage
-        "M",             # Manual adjustment
+        "POST",  # Postage
+        "DOT",  # Dotcom postage
+        "M",  # Manual adjustment
         "BANK CHARGES",  # Bank charges
-        "AMAZONFEE",     # Amazon fee
-        "CRUK",          # Charity item
-        "PADS",          # Packaging materials
-        "S",             # Sample
-        "D",             # Discount
+        "AMAZONFEE",  # Amazon fee
+        "CRUK",  # Charity item
+        "PADS",  # Packaging materials
+        "S",  # Sample
+        "D",  # Discount
     }
 )
 
@@ -80,9 +81,7 @@ _UCI_DATE_FORMAT: Final[str] = "%m/%d/%Y %H:%M"
 # Customer identifiers are categorical values. Digits are accepted directly,
 # and an Excel-style trailing decimal portion containing only zeroes is
 # removed. Scientific notation, signs, and fractional identifiers are refused.
-_CUSTOMER_ID_RE: Final[re.Pattern[str]] = re.compile(
-    r"^(?P<digits>[0-9]+)(?:\.0+)?$"
-)
+_CUSTOMER_ID_RE: Final[re.Pattern[str]] = re.compile(r"^(?P<digits>[0-9]+)(?:\.0+)?$")
 
 _LOG = get_logger(__name__)
 
@@ -168,24 +167,18 @@ class TypeCoercer:
         rows_in = int(len(frame))
         out = frame.copy()
 
-        quantity, quantity_missing, quantity_invalid = self._coerce_integer(
-            out["Quantity"]
-        )
+        quantity, quantity_missing, quantity_invalid = self._coerce_integer(out["Quantity"])
         out["Quantity"] = quantity
 
-        unit_price, price_missing, price_invalid = self._coerce_float(
-            out["UnitPrice"]
-        )
+        unit_price, price_missing, price_invalid = self._coerce_float(out["UnitPrice"])
         out["UnitPrice"] = unit_price
 
-        customer_id, customer_missing, customer_invalid = (
-            self._coerce_customer_id(out["CustomerID"])
+        customer_id, customer_missing, customer_invalid = self._coerce_customer_id(
+            out["CustomerID"]
         )
         out["CustomerID"] = customer_id
 
-        invoice_date, date_missing, date_invalid = self._coerce_date(
-            out["InvoiceDate"]
-        )
+        invoice_date, date_missing, date_invalid = self._coerce_date(out["InvoiceDate"])
         out["InvoiceDate"] = invoice_date
 
         for column in ("InvoiceNo", "StockCode", "Description", "Country"):
@@ -211,9 +204,7 @@ class TypeCoercer:
         return text.mask(text == "", pd.NA)
 
     @classmethod
-    def _coerce_integer(
-        cls, series: pd.Series
-    ) -> tuple[pd.Series, int, int]:
+    def _coerce_integer(cls, series: pd.Series) -> tuple[pd.Series, int, int]:
         import pandas as pd
 
         text = series.astype("string").str.strip()
@@ -233,9 +224,7 @@ class TypeCoercer:
         return coerced, int(missing.sum()), int(invalid.sum())
 
     @classmethod
-    def _coerce_float(
-        cls, series: pd.Series
-    ) -> tuple[pd.Series, int, int]:
+    def _coerce_float(cls, series: pd.Series) -> tuple[pd.Series, int, int]:
         import pandas as pd
 
         text = series.astype("string").str.strip()
@@ -253,8 +242,6 @@ class TypeCoercer:
     def _coerce_customer_id(
         series: pd.Series,
     ) -> tuple[pd.Series, int, int]:
-        import pandas as pd
-
         text = series.astype("string").str.strip()
         missing = series.isna() | text.isna() | (text == "")
 
@@ -358,12 +345,8 @@ class CancellationTagger:
         invoice = out["InvoiceNo"].astype("string").fillna("")
         normalized_invoice = invoice.str.strip().str.upper()
 
-        out["IsCancellation"] = normalized_invoice.str.match(
-            _CANCELLATION_RE, na=False
-        )
-        out["IsAdjustment"] = normalized_invoice.str.match(
-            _ADJUSTMENT_RE, na=False
-        )
+        out["IsCancellation"] = normalized_invoice.str.match(_CANCELLATION_RE, na=False)
+        out["IsAdjustment"] = normalized_invoice.str.match(_ADJUSTMENT_RE, na=False)
 
         negative_quantity = out["Quantity"].lt(0).fillna(False)
         out["IsReturn"] = negative_quantity & (~out["IsAdjustment"])
@@ -406,9 +389,7 @@ class CancellationTagger:
                 continue
 
             quantity = out.at[row_index, "Quantity"]
-            is_positive_quantity = (
-                not pd.isna(quantity) and int(cast(Any, quantity)) > 0
-            )
+            is_positive_quantity = not pd.isna(quantity) and int(cast(Any, quantity)) > 0
 
             if (
                 pair_key is not None
@@ -440,9 +421,7 @@ class CancellationTagger:
         return_count = int(return_mask.sum())
         paired_cancellations = int((cancellation_mask & paired_mask).sum())
         paired_returns = int((return_mask & paired_mask).sum())
-        positive_cancellations = int(
-            (cancellation_mask & (~negative_quantity)).sum()
-        )
+        positive_cancellations = int((cancellation_mask & (~negative_quantity)).sum())
 
         details = {
             "cancellations": cancellation_count,
@@ -459,9 +438,7 @@ class CancellationTagger:
         return out, StageDelta(self.name, rows_in, int(len(out)), details)
 
     @staticmethod
-    def _build_pair_key(
-        frame: pd.DataFrame, row_index: int
-    ) -> tuple[str, str, int, float] | None:
+    def _build_pair_key(frame: pd.DataFrame, row_index: int) -> tuple[str, str, int, float] | None:
         import pandas as pd
 
         customer_id = frame.at[row_index, "CustomerID"]
@@ -629,28 +606,23 @@ class Cleaner:
         import pandas as pd
 
         if not isinstance(frame, pd.DataFrame):
-            raise CleaningError(
-                "Cleaning requires a pandas DataFrame as its input"
-            )
+            raise CleaningError("Cleaning requires a pandas DataFrame as its input")
 
         actual = tuple(frame.columns)
         duplicate_names = tuple(
             dict.fromkeys(
-                str(column)
-                for column in frame.columns[frame.columns.duplicated()].tolist()
+                str(column) for column in frame.columns[frame.columns.duplicated()].tolist()
             )
         )
         if duplicate_names:
             raise CleaningError(
-                "Cleaning received duplicate column names: "
-                f"{duplicate_names}. Got: {actual}"
+                "Cleaning received duplicate column names: " f"{duplicate_names}. Got: {actual}"
             )
 
         missing = tuple(column for column in _EXPECTED_COLUMNS if column not in actual)
         if missing:
             raise CleaningError(
-                "Cleaning received a frame missing required columns: "
-                f"{missing}. Got: {actual}"
+                "Cleaning received a frame missing required columns: " f"{missing}. Got: {actual}"
             )
 
 

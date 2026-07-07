@@ -22,6 +22,7 @@ Design notes:
 * Raw cell values and filenames are not written to logs. Logs use row and column
   positions plus a short, non-reversible source identifier.
 """
+
 from __future__ import annotations
 
 import csv
@@ -135,15 +136,11 @@ class DataQualityReport:
 
     @property
     def error_count(self) -> int:
-        return sum(
-            1 for issue in self.issues if issue.severity is IssueSeverity.ERROR
-        )
+        return sum(1 for issue in self.issues if issue.severity is IssueSeverity.ERROR)
 
     @property
     def warning_count(self) -> int:
-        return sum(
-            1 for issue in self.issues if issue.severity is IssueSeverity.WARNING
-        )
+        return sum(1 for issue in self.issues if issue.severity is IssueSeverity.WARNING)
 
 
 @dataclass(frozen=True, slots=True)
@@ -244,19 +241,13 @@ class FileTypeDetector:
 
         if extension == ".xlsx":
             if not sample.startswith(_XLSX_MAGIC):
-                raise MimeMismatchError(
-                    "Extension is .xlsx but the source is not a ZIP container"
-                )
+                raise MimeMismatchError("Extension is .xlsx but the source is not a ZIP container")
             return FileKind.XLSX
 
         if sample.startswith(_XLSX_MAGIC):
-            raise MimeMismatchError(
-                "Extension is .csv but the source is a ZIP container"
-            )
+            raise MimeMismatchError("Extension is .csv but the source is a ZIP container")
         if b"\x00" in sample:
-            raise MimeMismatchError(
-                "Extension is .csv but the source contains binary NUL bytes"
-            )
+            raise MimeMismatchError("Extension is .csv but the source contains binary NUL bytes")
         return FileKind.CSV
 
     @staticmethod
@@ -307,9 +298,7 @@ class SourceInspector:
             raise FileParseError(f"Unable to read CSV header: {exc}") from exc
 
     @staticmethod
-    def _read_csv_header_with_encoding(
-        source: Path, encoding: str
-    ) -> tuple[str, ...]:
+    def _read_csv_header_with_encoding(source: Path, encoding: str) -> tuple[str, ...]:
         with source.open("r", encoding=encoding, newline="") as handle:
             reader = csv.reader(handle)
             try:
@@ -369,9 +358,7 @@ class SourceInspector:
 
         if total_uncompressed > 0:
             if total_compressed == 0:
-                raise FileTooLargeError(
-                    "XLSX archive has a suspicious compression ratio"
-                )
+                raise FileTooLargeError("XLSX archive has a suspicious compression ratio")
             ratio = total_uncompressed / total_compressed
             if ratio > self._max_xlsx_compression_ratio:
                 raise FileTooLargeError(
@@ -385,19 +372,14 @@ class SourceInspector:
             member = info.filename
             lower = member.lower()
             if "vbaproject.bin" in lower or lower.endswith(".bin"):
-                raise MacroContentError(
-                    f"Workbook contains a macro or binary part: {member}"
-                )
+                raise MacroContentError(f"Workbook contains a macro or binary part: {member}")
 
     @staticmethod
-    def _reject_worksheet_formulas(
-        archive: ZipFile, infos: Sequence[ZipInfo]
-    ) -> None:
+    def _reject_worksheet_formulas(archive: ZipFile, infos: Sequence[ZipInfo]) -> None:
         worksheet_members = [
             info.filename
             for info in infos
-            if info.filename.startswith("xl/worksheets/")
-            and info.filename.lower().endswith(".xml")
+            if info.filename.startswith("xl/worksheets/") and info.filename.lower().endswith(".xml")
         ]
 
         for member in worksheet_members:
@@ -407,8 +389,7 @@ class SourceInspector:
                         local_name = element.tag.rsplit("}", 1)[-1]
                         if local_name == "f":
                             raise FormulaInjectionError(
-                                "Workbook contains a formula in worksheet part "
-                                f"{member}"
+                                "Workbook contains a formula in worksheet part " f"{member}"
                             )
                         element.clear()
             except ET.ParseError as exc:
@@ -477,9 +458,7 @@ class CsvReader:
         raise AssertionError("unreachable")
 
     @staticmethod
-    def _read_with_encoding(
-        source: Path, max_rows: int, encoding: str
-    ) -> "pd.DataFrame":
+    def _read_with_encoding(source: Path, max_rows: int, encoding: str) -> "pd.DataFrame":
         import pandas as pd
 
         return pd.read_csv(
@@ -509,9 +488,7 @@ class CsvReader:
             ),
         ):
             raise FileParseError(f"Unable to parse CSV source: {exc}") from exc
-        raise FileParseError(
-            f"Unexpected CSV parser failure: {type(exc).__name__}: {exc}"
-        ) from exc
+        raise FileParseError(f"Unexpected CSV parser failure: {type(exc).__name__}: {exc}") from exc
 
 
 class XlsxReader:
@@ -552,9 +529,7 @@ class SchemaValidator:
         actual = tuple(str(column) for column in columns)
         duplicates = self._find_duplicates(actual)
         if duplicates:
-            raise SchemaViolationError(
-                f"Duplicate column names detected: {duplicates}"
-            )
+            raise SchemaViolationError(f"Duplicate column names detected: {duplicates}")
 
         missing = tuple(column for column in self._required if column not in actual)
         unexpected = tuple(column for column in actual if column not in self._required)
@@ -608,14 +583,10 @@ class ContentInspector:
             series = frame[column].astype("string")
             normalized = series.str.lstrip(" ")
             has_prefix = normalized.str.startswith(_FORMULA_PREFIXES, na=False)
-            is_signed_number = normalized.str.fullmatch(
-                _SIGNED_NUMERIC_RE, na=False
-            )
+            is_signed_number = normalized.str.fullmatch(_SIGNED_NUMERIC_RE, na=False)
             unsafe = has_prefix & ~is_signed_number
 
-            for row_position, is_unsafe in enumerate(
-                unsafe.to_numpy(dtype=bool), start=1
-            ):
+            for row_position, is_unsafe in enumerate(unsafe.to_numpy(dtype=bool), start=1):
                 if not is_unsafe:
                     continue
 
@@ -691,9 +662,7 @@ class Ingestor:
         frame = reader.read(normalized_source, self._max_rows)
 
         if len(frame) > self._max_rows:
-            raise FileTooLargeError(
-                f"File contains more than {self._max_rows:,} data rows"
-            )
+            raise FileTooLargeError(f"File contains more than {self._max_rows:,} data rows")
 
         # Validate again after parsing in case a parser or injected reader
         # transforms the columns unexpectedly.
@@ -734,9 +703,7 @@ class Ingestor:
             raise FileAccessError(f"Unable to determine source size: {exc}") from exc
 
         if size > self._max_file_bytes:
-            raise FileTooLargeError(
-                f"File is {size:,} bytes; maximum is {self._max_file_bytes:,}"
-            )
+            raise FileTooLargeError(f"File is {size:,} bytes; maximum is {self._max_file_bytes:,}")
 
     @staticmethod
     def _source_id(source: Path) -> str:
