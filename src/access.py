@@ -4,6 +4,7 @@ Central authorization checkpoint. Every controller call passes through
 :func:`check` with the authenticated role. Denials, allows, and small-group
 suppression events are appended to the audit journal (M14).
 """
+
 from __future__ import annotations
 
 from typing import Literal

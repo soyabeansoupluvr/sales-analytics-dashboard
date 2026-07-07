@@ -4,6 +4,7 @@ Charts are labeled with the underlying formula, the filter that produced
 them, and any exclusions (e.g. cancellations, small-group suppression) so
 the viewer always knows what is and is not in the picture.
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING

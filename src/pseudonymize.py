@@ -5,6 +5,7 @@ the analytics layer never sees a raw identifier. Keys are stored in an
 environment-scoped vault (see M11 config), rotated quarterly, and never
 written to logs.
 """
+
 from __future__ import annotations
 
 import hmac

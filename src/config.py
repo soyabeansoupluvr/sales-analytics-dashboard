@@ -3,6 +3,7 @@
 Reads environment variables from ``.env`` at startup. Secrets (HMAC keys,
 authenticator hashes) are never committed and never logged.
 """
+
 from __future__ import annotations
 
 import os

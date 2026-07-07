@@ -9,6 +9,7 @@ Scaffold — module bodies are implemented incrementally across Units 4-6.
 Author: Rev. Drew Brown
 Course: MSIT 5290 Capstone, University of the People (2026)
 """
+
 from __future__ import annotations
 
 # import os

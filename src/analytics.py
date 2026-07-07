@@ -5,6 +5,7 @@ Metrics are computed with pandas aggregations; RFM segmentation uses
 inspected for fairness (score sensitivity to holdout removal) before being
 released to the presentation layer.
 """
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
