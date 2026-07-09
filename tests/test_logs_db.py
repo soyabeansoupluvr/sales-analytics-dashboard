@@ -289,6 +289,9 @@ class TestDatabase:
         assert target.exists()
 
     def test_rejects_malformed_settings_url(self, tmp_path: Path) -> None:
-        settings = Settings(sqlite_url="not-a-sqlite-url")
-        with pytest.raises(DatabaseError):
-            Database(settings=settings)
+        # Validation moved up the stack in M11: Settings now refuses malformed
+        # SQLITE_URLs at construction, so Database never sees a bad value.
+        from src.config import ConfigError
+
+        with pytest.raises(ConfigError):
+            Settings(sqlite_url="not-a-sqlite-url")
