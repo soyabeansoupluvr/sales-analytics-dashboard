@@ -22,12 +22,18 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Final
 
+import numpy as np
 import pandas as pd
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
+from sklearn.preprocessing import StandardScaler
 
+from src.access import enforce_small_group
 from src.logs import AuditAction, AuditEvent, AuditLog, AuditOutcome
 
 if TYPE_CHECKING:
     from src.access import Actor
+    from src.config import Settings
 
 
 # --------------------------------------------------------------------------- #
@@ -51,6 +57,14 @@ _REQUIRED_COLUMNS: Final[frozenset[str]] = frozenset(
 )
 
 _DEFAULT_TOP_N: Final[int] = 10
+
+# M4 constants. random_state keeps K-Means deterministic so audit records can be reproduced.
+# n_init is explicit to avoid future-default changes in sklearn.
+_DEFAULT_K: Final[int] = 4
+_KMEANS_RANDOM_STATE: Final[int] = 20260716
+_KMEANS_N_INIT: Final[int] = 10
+_MIN_CUSTOMERS_FOR_CLUSTERING: Final[int] = 10
+_RFM_COLUMNS: Final[tuple[str, ...]] = ("recency", "frequency", "monetary")
 
 
 class AnalyticsError(Exception):
@@ -421,20 +435,189 @@ def repeat_rate(
 
 
 # --------------------------------------------------------------------------- #
-# M4 - Segmentation (stub, unchanged)
+# M4 - RFM segmentation
 # --------------------------------------------------------------------------- #
 
 
-def rfm_segments(frame: pd.DataFrame, k: int = 4) -> pd.DataFrame:
+def rfm_segments(
+    frame: pd.DataFrame,
+    k: int = _DEFAULT_K,
+    *,
+    settings: "Settings | None" = None,
+    threshold: int | None = None,
+    actor: "Actor | None" = None,
+    audit_log: AuditLog | None = None,
+) -> pd.DataFrame:
     """Compute RFM scores and K-Means segments.
+
+    Args:
+        frame: Cleaned DataFrame conforming to the M10 output contract. CustomerID is expected to
+            contain M6 pseudonyms, not raw identifiers.
+        k: Number of clusters to fit. Must be at least 2 and less than the number of identified
+            customers.
+        settings: Application settings. Required unless threshold is supplied.
+        threshold: Explicit small-group threshold override.
+        actor: Actor recorded on audit events.
+        audit_log: Optional audit log. When supplied, the segmentation run is audited, and
+            suppressed clusters are audited as access denials.
 
     Returns:
         DataFrame with CustomerID, recency, frequency, monetary, and cluster columns.
-        Clusters below the small-group threshold are removed.
-        Implemented in feature/m4-segmentation.
+        Clusters below the small-group threshold are removed. If there are too few identified
+        customers, an empty five-column DataFrame is returned and clustering is not attempted.
+
+    Raises:
+        AnalyticsError: If the frame contract is violated, k is out of range, or too few customers
+            are present for the requested k.
     """
 
-    raise NotImplementedError("Implemented in feature/m4-segmentation")
+    _require_columns(frame)
+    if k < 2:
+        raise AnalyticsError("k must be >= 2")
+
+    rfm = _compute_rfm(frame)
+    if rfm.empty or len(rfm) < _MIN_CUSTOMERS_FOR_CLUSTERING:
+        _audit(
+            audit_log,
+            actor=actor,
+            resource="rfm_segments",
+            details={"customers": int(len(rfm)), "suppressed_reason": "too_few_customers"},
+        )
+        return _empty_rfm_output()
+
+    if k >= len(rfm):
+        raise AnalyticsError(f"k={k} is not less than the number of customers ({len(rfm)})")
+
+    # Standardize before K-Means so no dimension dominates the Euclidean distance. Monetary
+    # value, in particular, has a much larger scale than recency-in-days or invoice counts.
+    scaler = StandardScaler()
+    scaled = scaler.fit_transform(rfm[list(_RFM_COLUMNS)].to_numpy())
+
+    model = KMeans(
+        n_clusters=k,
+        n_init=_KMEANS_N_INIT,
+        random_state=_KMEANS_RANDOM_STATE,
+    )
+    labels = model.fit_predict(scaled)
+    rfm = rfm.copy()
+    rfm["cluster"] = labels.astype("int64")
+
+    # Silhouette requires at least two distinct labels. If K-Means collapses to one cluster,
+    # report the result without raising.
+    unique_labels = np.unique(labels)
+    if unique_labels.size < 2:
+        _audit(
+            audit_log,
+            actor=actor,
+            resource="rfm_segments",
+            details={
+                "k": int(k),
+                "customers": int(len(rfm)),
+                "kept_customers": int(len(rfm)),
+                "silhouette": None,
+                "clusters_suppressed": 0,
+                "suppressed_reason": "degenerate_single_cluster",
+            },
+        )
+        return rfm[["CustomerID", *_RFM_COLUMNS, "cluster"]]
+
+    silhouette = float(silhouette_score(scaled, labels))
+
+    # Suppress clusters below the configured small-group threshold. Each dropped cluster is
+    # audited by enforce_small_group as ACCESS_DENIED.
+    cluster_sizes = rfm["cluster"].value_counts().to_dict()
+    suppressed: list[int] = []
+    kept_clusters: list[int] = []
+    for cluster_id, size in sorted(cluster_sizes.items()):
+        allowed = enforce_small_group(
+            int(size),
+            settings,
+            threshold=threshold,
+            actor=actor,
+            resource=f"rfm_cluster_{cluster_id}",
+            audit_log=audit_log,
+        )
+        if allowed:
+            kept_clusters.append(int(cluster_id))
+        else:
+            suppressed.append(int(cluster_id))
+
+    if suppressed:
+        rfm = rfm.loc[rfm["cluster"].isin(kept_clusters)].reset_index(drop=True)
+
+    _audit(
+        audit_log,
+        actor=actor,
+        resource="rfm_segments",
+        details={
+            "k": int(k),
+            "customers": int(sum(cluster_sizes.values())),
+            "kept_customers": int(len(rfm)),
+            "silhouette": round(silhouette, 4),
+            "clusters_suppressed": len(suppressed),
+        },
+    )
+    return rfm[["CustomerID", *_RFM_COLUMNS, "cluster"]]
+
+
+# --------------------------------------------------------------------------- #
+# RFM helpers
+# --------------------------------------------------------------------------- #
+
+
+def _compute_rfm(frame: pd.DataFrame) -> pd.DataFrame:
+    """Return the per-customer RFM table (before scaling and clustering).
+
+    Recency is measured in whole days from the frame's maximum non-return
+    invoice date to each customer's most recent positive invoice date.
+    Frequency counts distinct positive invoices; monetary sums Revenue on
+    non-adjustment rows (returns net out).
+    """
+
+    non_adj = _non_adjustment(frame)
+    identified = non_adj.dropna(subset=["CustomerID", "InvoiceDate"])
+    if identified.empty:
+        return pd.DataFrame(columns=["CustomerID", *_RFM_COLUMNS]).astype(
+            {"recency": "int64", "frequency": "int64", "monetary": "float64"}
+        )
+
+    positives = identified.loc[~identified["IsReturn"].fillna(False).astype(bool)]
+    if positives.empty:
+        return pd.DataFrame(columns=["CustomerID", *_RFM_COLUMNS]).astype(
+            {"recency": "int64", "frequency": "int64", "monetary": "float64"}
+        )
+
+    reference_date = positives["InvoiceDate"].max()
+
+    last_purchase = positives.groupby("CustomerID", dropna=True)["InvoiceDate"].max()
+    recency = (reference_date - last_purchase).dt.days.astype("int64")
+
+    frequency = positives.groupby("CustomerID", dropna=True)["InvoiceNo"].nunique().astype("int64")
+
+    monetary = identified.groupby("CustomerID", dropna=True)["Revenue"].sum().astype("float64")
+
+    rfm = (
+        recency.to_frame("recency")
+        .join(frequency.rename("frequency"))
+        .join(monetary.rename("monetary"))
+        .reset_index()
+    )
+    # Drop customers with missing or non-finite monetary totals. K-Means cannot fit on
+    # non-finite values.
+    rfm = rfm.replace([np.inf, -np.inf], np.nan).dropna(subset=list(_RFM_COLUMNS))
+    return rfm.reset_index(drop=True)
+
+
+def _empty_rfm_output() -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "CustomerID": pd.Series(dtype="object"),
+            "recency": pd.Series(dtype="int64"),
+            "frequency": pd.Series(dtype="int64"),
+            "monetary": pd.Series(dtype="float64"),
+            "cluster": pd.Series(dtype="int64"),
+        }
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -478,9 +661,8 @@ def _audit(
 def _to_float(value: Any) -> float:
     """Coerce numpy / nullable scalars to native Python floats.
 
-    ``DataFrame.sum`` on an empty or all-NA column returns ``0`` in some
-    dtypes and ``NA`` in others. Presentation code expects a plain ``0.0``
-    for the "no revenue yet" case.
+    Pandas reductions can return numpy or nullable scalar types. Presentation code
+    expects plain floats, including 0.0 for empty or all-missing revenue totals.
     """
 
     if value is None or pd.isna(value):
