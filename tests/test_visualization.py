@@ -129,6 +129,11 @@ def rfm_frame() -> pd.DataFrame:
                 800.0,
             ],
             "cluster": [0, 0, 1, 1, 2, 2, 2, 3, 0, 1, 2, 0],
+            "stability_score": [0.78] * 12,
+            "stability_holdout_size": [4] * 12,
+            "stability_threshold": [0.7] * 12,
+            "stability_flag": [True] * 12,
+            "stability_reason": [""] * 12,
         }
     )
 
@@ -288,7 +293,20 @@ def test_rfm_scatter_encodes_three_dimensions(rfm_frame: pd.DataFrame) -> None:
 
 
 def test_rfm_scatter_handles_empty_frame() -> None:
-    empty = pd.DataFrame(columns=["CustomerID", "recency", "frequency", "monetary", "cluster"])
+    empty = pd.DataFrame(
+        columns=[
+            "CustomerID",
+            "recency",
+            "frequency",
+            "monetary",
+            "cluster",
+            "stability_score",
+            "stability_holdout_size",
+            "stability_threshold",
+            "stability_flag",
+            "stability_reason",
+        ]
+    )
     chart = rfm_scatter(empty)
     assert chart.row_count == 0
     assert chart.exclusions["clusters_rendered"] == 0
@@ -305,6 +323,42 @@ def test_rfm_scatter_rejects_missing_columns() -> None:
     frame = pd.DataFrame({"CustomerID": ["a"], "recency": [1]})
     with pytest.raises(VisualizationError, match="missing required columns"):
         rfm_scatter(frame)
+
+
+def test_rfm_scatter_reads_stability_from_columns(rfm_frame: pd.DataFrame) -> None:
+    """RFM scatter captions include stability metadata when columns are present."""
+
+    enriched = rfm_frame.copy()
+    enriched["stability_score"] = 0.82
+    enriched["stability_holdout_size"] = 3
+    enriched["stability_threshold"] = 0.7
+    enriched["stability_flag"] = True
+    enriched["stability_reason"] = ""
+
+    chart = rfm_scatter(enriched)
+    assert chart.exclusions["stability_score"] == pytest.approx(0.82)
+    assert chart.exclusions["stability_flag"] is True
+    assert chart.exclusions["stability_holdout_size"] == 3
+    assert "0.82" in chart.formula
+    assert "3-customer holdout" in chart.formula
+    assert "stable" in chart.formula
+
+
+def test_rfm_scatter_caption_reports_skip_reason(rfm_frame: pd.DataFrame) -> None:
+    """RFM scatter captions report skipped stability checks."""
+
+    enriched = rfm_frame.copy()
+    enriched["stability_score"] = float("nan")
+    enriched["stability_holdout_size"] = 0
+    enriched["stability_threshold"] = 0.7
+    enriched["stability_flag"] = [None] * len(enriched)
+    enriched["stability_reason"] = "degenerate_single_cluster"
+
+    chart = rfm_scatter(enriched)
+    assert chart.exclusions["stability_score"] is None
+    assert chart.exclusions["stability_flag"] is None
+    assert chart.exclusions["stability_reason"] == "degenerate_single_cluster"
+    assert "single cluster" in chart.formula
 
 
 # --------------------------------------------------------------------------- #

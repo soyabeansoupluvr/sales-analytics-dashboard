@@ -63,15 +63,51 @@ _ROLE_COLUMNS: dict[str, set[str]] = {
         "InvoiceDate",
         "UnitPrice",
         "Country",
+        "Revenue",
+        "IsReturn",
+        "IsAdjustment",
     },
 }
 
 # Additional per-view column subsets applied on top of the role filter.
 # Keys are the four canonical view names from M8.
+#
+# Views expose the columns their downstream M3/M4 metrics need. The
+# M10-derived columns (Revenue, IsReturn, IsAdjustment) travel with every
+# non-customers view because every M3 revenue-shaped metric depends on
+# them. The viewer role's aggregate-only rule is still enforced by the
+# _ROLE_COLUMNS intersection applied after the view filter, so a viewer
+# reading the revenue view sees the aggregate columns minus CustomerID.
 _VIEW_COLUMNS: dict[ViewName, set[str] | None] = {
-    "revenue": {"InvoiceNo", "InvoiceDate", "Quantity", "UnitPrice", "Country"},
-    "products": {"StockCode", "Description", "Quantity", "UnitPrice"},
-    "time": {"InvoiceDate", "Quantity", "UnitPrice"},
+    "revenue": {
+        "InvoiceNo",
+        "InvoiceDate",
+        "Quantity",
+        "UnitPrice",
+        "Country",
+        "Revenue",
+        "IsReturn",
+        "IsAdjustment",
+        "CustomerID",
+    },
+    "products": {
+        "StockCode",
+        "Description",
+        "Quantity",
+        "UnitPrice",
+        "Revenue",
+        "IsReturn",
+        "IsAdjustment",
+    },
+    "time": {
+        "InvoiceDate",
+        "Quantity",
+        "UnitPrice",
+        "Revenue",
+        "IsReturn",
+        "IsAdjustment",
+        "InvoiceNo",
+    },
     "customers": None,  # None == "all columns the role can see"
 }
 

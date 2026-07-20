@@ -180,9 +180,18 @@ def test_revenue_summary_reports_missing_columns() -> None:
 
 
 def test_all_public_functions_validate_columns(empty_frame: pd.DataFrame) -> None:
-    partial = empty_frame.drop(columns=["Revenue"])
-    for fn in (revenue_summary, product_metrics, time_series, country_metrics, repeat_rate):
-        with pytest.raises(AnalyticsError, match="missing required columns"):
+    # IsReturn is required by every M3 metric, so one dropped column exercises the shared
+    # validation path for all public functions.
+    partial = empty_frame.drop(columns=["IsReturn"])
+    metric_names = {
+        revenue_summary: "revenue_summary",
+        product_metrics: "product_metrics",
+        time_series: "time_series",
+        country_metrics: "country_metrics",
+        repeat_rate: "repeat_rate",
+    }
+    for fn, name in metric_names.items():
+        with pytest.raises(AnalyticsError, match=rf"{name} missing required columns"):
             fn(partial)
 
 

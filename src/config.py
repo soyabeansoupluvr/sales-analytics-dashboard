@@ -74,6 +74,10 @@ class Settings:
     small_group_threshold: int = field(default=5)
     rate_limit_rpm: int = field(default=120)
 
+    # M4 fairness sensitivity check
+    rfm_holdout_fraction: float = field(default=0.1)
+    rfm_stability_threshold: float = field(default=0.7)
+
     # Logging
     log_level: str = field(default="INFO")
     log_format: str = field(default="json")
@@ -92,6 +96,10 @@ class Settings:
         self._validate_pseudonym_key(self.pseudonym_key)
         self._validate_positive_int("small_group_threshold", self.small_group_threshold)
         self._validate_positive_int("rate_limit_rpm", self.rate_limit_rpm)
+        self._validate_unit_fraction("rfm_holdout_fraction", self.rfm_holdout_fraction)
+        self._validate_unit_fraction(
+            "rfm_stability_threshold", self.rfm_stability_threshold, allow_zero=True
+        )
         self._validate_log_level(self.log_level)
         self._validate_log_format(self.log_format)
 
@@ -157,6 +165,18 @@ class Settings:
             raise ConfigError(f"{name} must be >= 1; got {value}")
 
     @staticmethod
+    def _validate_unit_fraction(name: str, value: float, *, allow_zero: bool = False) -> None:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ConfigError(f"{name} must be a float in (0, 1); got {type(value).__name__}")
+        numeric = float(value)
+        if allow_zero:
+            if not (0.0 <= numeric <= 1.0):
+                raise ConfigError(f"{name} must be within [0, 1]; got {value}")
+        else:
+            if not (0.0 < numeric < 1.0):
+                raise ConfigError(f"{name} must be within (0, 1); got {value}")
+
+    @staticmethod
     def _validate_log_level(value: str) -> None:
         if not isinstance(value, str) or value not in _VALID_LOG_LEVELS:
             raise ConfigError(
@@ -192,6 +212,15 @@ def _from_env() -> Settings:
         except ValueError as exc:
             raise ConfigError(f"{name} must be an integer; got {raw!r}") from exc
 
+    def _float(name: str, default: float) -> float:
+        raw = os.getenv(name)
+        if raw is None or raw == "":
+            return default
+        try:
+            return float(raw)
+        except ValueError as exc:
+            raise ConfigError(f"{name} must be a float; got {raw!r}") from exc
+
     return Settings(
         data_raw_dir=Path(os.getenv("DATA_RAW_DIR", "data/raw")),
         data_processed_dir=Path(os.getenv("DATA_PROCESSED_DIR", "data/processed")),
@@ -199,6 +228,8 @@ def _from_env() -> Settings:
         pseudonym_key=os.getenv("PSEUDONYM_KEY", ""),
         small_group_threshold=_int("SMALL_GROUP_SUPPRESSION_THRESHOLD", 5),
         rate_limit_rpm=_int("RATE_LIMIT_RPM", 120),
+        rfm_holdout_fraction=_float("RFM_HOLDOUT_FRACTION", 0.1),
+        rfm_stability_threshold=_float("RFM_STABILITY_THRESHOLD", 0.7),
         log_level=os.getenv("LOG_LEVEL", "INFO"),
         log_format=os.getenv("LOG_FORMAT", "json"),
         log_dir=Path(os.getenv("LOG_DIR", "logs")),

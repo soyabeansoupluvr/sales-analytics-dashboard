@@ -266,6 +266,8 @@ _ENV_TO_FIELD = {
     "PSEUDONYM_KEY": "pseudonym_key",
     "SMALL_GROUP_SUPPRESSION_THRESHOLD": "small_group_threshold",
     "RATE_LIMIT_RPM": "rate_limit_rpm",
+    "RFM_HOLDOUT_FRACTION": "rfm_holdout_fraction",
+    "RFM_STABILITY_THRESHOLD": "rfm_stability_threshold",
     "LOG_LEVEL": "log_level",
     "LOG_FORMAT": "log_format",
     "LOG_DIR": "log_dir",

@@ -278,11 +278,27 @@ def test_rfm_monetary_nets_returns() -> None:
 def test_rfm_produces_expected_output_shape() -> None:
     frame = _synthetic_frame(n_customers=40, seed=1)
     out = rfm_segments(frame, k=4, threshold=1)
-    assert list(out.columns) == ["CustomerID", "recency", "frequency", "monetary", "cluster"]
+    assert list(out.columns) == [
+        "CustomerID",
+        "recency",
+        "frequency",
+        "monetary",
+        "cluster",
+        "stability_score",
+        "stability_holdout_size",
+        "stability_threshold",
+        "stability_flag",
+        "stability_reason",
+    ]
     assert out["cluster"].dtype == "int64"
     assert out["recency"].dtype == "int64"
     assert out["frequency"].dtype == "int64"
     assert out["monetary"].dtype == "float64"
+    assert out["stability_score"].dtype == "float64"
+    assert out["stability_holdout_size"].dtype == "int64"
+    assert out["stability_threshold"].dtype == "float64"
+    assert out["stability_flag"].dtype == object
+    assert out["stability_reason"].dtype == object
     assert len(out) == 40
 
 
@@ -355,7 +371,18 @@ def test_rfm_high_threshold_suppresses_all_clusters(
     )
     assert out.empty
     # Column contract still holds on the empty return.
-    assert list(out.columns) == ["CustomerID", "recency", "frequency", "monetary", "cluster"]
+    assert list(out.columns) == [
+        "CustomerID",
+        "recency",
+        "frequency",
+        "monetary",
+        "cluster",
+        "stability_score",
+        "stability_holdout_size",
+        "stability_threshold",
+        "stability_flag",
+        "stability_reason",
+    ]
 
 
 # --------------------------------------------------------------------------- #
@@ -432,7 +459,18 @@ def test_rfm_empty_frame_returns_empty_output(
         audit_log=audit_log,
     )
     assert out.empty
-    assert list(out.columns) == ["CustomerID", "recency", "frequency", "monetary", "cluster"]
+    assert list(out.columns) == [
+        "CustomerID",
+        "recency",
+        "frequency",
+        "monetary",
+        "cluster",
+        "stability_score",
+        "stability_holdout_size",
+        "stability_threshold",
+        "stability_flag",
+        "stability_reason",
+    ]
 
     events = audit_log.read(limit=10)
     reasons = [
@@ -484,7 +522,18 @@ def test_rfm_too_few_customers_returns_empty_output() -> None:
 
     out = rfm_segments(frame, k=3, threshold=1)
     assert out.empty
-    assert list(out.columns) == ["CustomerID", "recency", "frequency", "monetary", "cluster"]
+    assert list(out.columns) == [
+        "CustomerID",
+        "recency",
+        "frequency",
+        "monetary",
+        "cluster",
+        "stability_score",
+        "stability_holdout_size",
+        "stability_threshold",
+        "stability_flag",
+        "stability_reason",
+    ]
 
 
 def test_rfm_ignores_unidentified_customers() -> None:
@@ -513,3 +562,134 @@ def test_rfm_ignores_unidentified_customers() -> None:
     out = rfm_segments(combined, k=3, threshold=1)
     assert len(out) == 15
     assert out["CustomerID"].notna().all()
+
+
+# --------------------------------------------------------------------------- #
+# M4 fairness sensitivity columns
+# --------------------------------------------------------------------------- #
+
+
+def test_rfm_populates_stability_columns_on_normal_fit(
+    settings: Settings,
+) -> None:
+    """A normal fit produces per-row stability values that are constant across rows."""
+
+    frame = _synthetic_frame(n_customers=40, seed=11)
+    out = rfm_segments(frame, k=4, settings=settings, threshold=1)
+
+    assert not out.empty
+    score = out["stability_score"].iloc[0]
+    assert pd.notna(score)
+    assert -1.0 <= float(score) <= 1.0
+
+    # Stability values describe the fit, so they should be identical per row.
+    assert out["stability_score"].nunique(dropna=False) == 1
+    assert out["stability_holdout_size"].nunique(dropna=False) == 1
+    assert out["stability_threshold"].nunique(dropna=False) == 1
+    assert out["stability_flag"].nunique(dropna=False) == 1
+    assert out["stability_reason"].nunique(dropna=False) == 1
+
+    assert out["stability_reason"].iloc[0] == ""
+    assert isinstance(out["stability_flag"].iloc[0], bool)
+    assert int(out["stability_holdout_size"].iloc[0]) >= 2
+
+
+def test_rfm_stability_flag_respects_configured_threshold() -> None:
+    """stability_flag toggles at the configured threshold and rides on every row."""
+
+    frame = _synthetic_frame(n_customers=40, seed=12)
+
+    lenient = Settings(
+        sqlite_url="sqlite:///:memory:",
+        pseudonym_key=_KEY_HEX,
+        rfm_stability_threshold=0.0,
+    )
+    strict = Settings(
+        sqlite_url="sqlite:///:memory:",
+        pseudonym_key=_KEY_HEX,
+        rfm_stability_threshold=1.0,
+    )
+
+    lenient_out = rfm_segments(frame, k=4, settings=lenient, threshold=1)
+    strict_out = rfm_segments(frame, k=4, settings=strict, threshold=1)
+
+    # The flag must reflect the score >= threshold comparison the module documents.
+    lenient_score = float(lenient_out["stability_score"].iloc[0])
+    strict_score = float(strict_out["stability_score"].iloc[0])
+    assert lenient_score == strict_score  # same seed, same fit
+    assert lenient_out["stability_flag"].iloc[0] is bool(lenient_score >= 0.0)
+    assert strict_out["stability_flag"].iloc[0] is bool(strict_score >= 1.0)
+
+    assert float(lenient_out["stability_threshold"].iloc[0]) == pytest.approx(0.0)
+    assert float(strict_out["stability_threshold"].iloc[0]) == pytest.approx(1.0)
+
+
+def test_rfm_too_few_customers_populates_skip_reason() -> None:
+    """Too-few-customer outputs still expose the stability column contract."""
+
+    rows = [
+        _cleaned_row(
+            InvoiceNo=f"INV{i}",
+            CustomerID=f"pseudo-{i:03d}",
+            Quantity=1,
+            UnitPrice=5.0,
+            Revenue=5.0,
+            InvoiceDate=pd.Timestamp("2024-01-01"),
+        )
+        for i in range(1, 6)
+    ]
+    frame = pd.DataFrame(rows)
+    frame["InvoiceDate"] = pd.to_datetime(frame["InvoiceDate"])
+
+    out = rfm_segments(frame, k=3, threshold=1)
+    assert out.empty
+    # An empty frame still declares the sensitivity columns with the documented dtypes.
+    assert out["stability_score"].dtype == "float64"
+    assert out["stability_holdout_size"].dtype == "int64"
+    assert out["stability_flag"].dtype == object
+    assert out["stability_reason"].dtype == object
+
+
+def test_rfm_insufficient_customers_for_holdout_records_skip(
+    settings: Settings,
+) -> None:
+    """When the holdout would starve the refit, the reason column captures that."""
+
+    settings_with_large_holdout = Settings(
+        sqlite_url=settings.sqlite_url,
+        pseudonym_key=_KEY_HEX,
+        data_processed_dir=settings.data_processed_dir,
+        data_raw_dir=settings.data_raw_dir,
+        log_dir=settings.log_dir,
+        rfm_holdout_fraction=0.95,
+    )
+    frame = _synthetic_frame(n_customers=11, seed=13)
+
+    out = rfm_segments(
+        frame,
+        k=3,
+        settings=settings_with_large_holdout,
+        threshold=1,
+    )
+    assert not out.empty
+    reason = str(out["stability_reason"].iloc[0])
+    assert reason == "insufficient_customers_for_holdout"
+    assert pd.isna(out["stability_score"].iloc[0])
+    assert out["stability_flag"].iloc[0] is None
+    assert int(out["stability_holdout_size"].iloc[0]) == 0
+
+
+def test_rfm_stability_columns_survive_filter_and_groupby() -> None:
+    """Sensitivity columns survive downstream filters and groupbys."""
+
+    frame = _synthetic_frame(n_customers=40, seed=14)
+    out = rfm_segments(frame, k=4, threshold=1)
+
+    kept_clusters = sorted(out["cluster"].unique().tolist())[:2]
+    filtered = out.loc[out["cluster"].isin(kept_clusters)].reset_index(drop=True)
+    assert "stability_score" in filtered.columns
+    assert filtered["stability_score"].nunique(dropna=False) == 1
+
+    grouped = out.groupby("cluster", as_index=False)["stability_score"].first()
+    assert "stability_score" in grouped.columns
+    assert grouped["stability_score"].nunique(dropna=False) == 1
