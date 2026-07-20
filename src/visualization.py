@@ -337,18 +337,6 @@ def rfm_scatter(segments: pd.DataFrame) -> ExplainedChart:
         "stability_flag",
         "stability_reason",
     }
-    required = {
-        "CustomerID",
-        "recency",
-        "frequency",
-        "monetary",
-        "cluster",
-        "stability_score",
-        "stability_holdout_size",
-        "stability_threshold",
-        "stability_flag",
-        "stability_reason",
-    }
     missing = required.difference(segments.columns)
     if missing:
         raise VisualizationError(
@@ -383,20 +371,6 @@ def rfm_scatter(segments: pd.DataFrame) -> ExplainedChart:
         figure.update_layout(height=420, legend_title_text="Cluster")
 
     cluster_count = int(segments["cluster"].nunique()) if not segments.empty else 0
-    stability = _describe_stability(segments)
-    formula = (
-        "RFM segments group customers by recency, frequency, and monetary value. "
-        "The chart plots recency against monetary value, sizes markers by frequency, "
-        "and colors markers by segment. " + stability["prose"]
-    )
-    exclusions: dict[str, Any] = {
-        "small_group_clusters": 0,
-        "clusters_rendered": cluster_count,
-        "stability_score": stability["score"],
-        "stability_flag": stability["flag"],
-        "stability_holdout_size": stability["holdout_size"],
-        "stability_reason": stability["reason"],
-    }
     stability = _describe_stability(segments)
     formula = (
         "RFM segments group customers by recency, frequency, and monetary value. "
