@@ -102,7 +102,7 @@ class AnalyticsError(Exception):
 def _require_columns(frame: pd.DataFrame, metric: str) -> None:
     """Fail fast if the cleaned-frame contract is violated for this metric.
 
-    Each metric declares its own column requirements in _REQUIRED_BY_METRIC`. The error message
+    Each metric declares its own column requirements in _REQUIRED_BY_METRIC. The error message
     names the metric so a viewer-scoped frame denied by rfm_segments produces a clear cause.
     """
 

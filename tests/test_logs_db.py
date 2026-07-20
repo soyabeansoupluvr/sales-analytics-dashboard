@@ -220,18 +220,26 @@ class TestDatabase:
         }.issubset(columns)
 
     def test_migrations_only_run_once_per_instance(self, tmp_path: Path) -> None:
+        """Repeated connects on one Database do not duplicate migration records."""
+
         settings = _settings_for(tmp_path)
         db = Database(settings=settings)
+        expected_versions = {m.version for m in SchemaMigrator().discover()}
 
         with db.connect() as connection:
             connection.execute("SELECT 1")
         with db.connect() as connection:
             rows = list(connection.execute("SELECT version FROM schema_version"))
 
-        assert len(rows) == 1
+        recorded = [int(r[0]) for r in rows]
+        assert set(recorded) == expected_versions
+        assert len(recorded) == len(set(recorded)), f"schema_version has duplicate rows: {recorded}"
 
     def test_migrations_survive_across_instances(self, tmp_path: Path) -> None:
+        """A second Database for the same file does not duplicate migration records."""
+
         settings = _settings_for(tmp_path)
+        expected_versions = {m.version for m in SchemaMigrator().discover()}
 
         first = Database(settings=settings)
         with first.connect() as connection:
@@ -241,7 +249,9 @@ class TestDatabase:
         with second.connect() as connection:
             rows = list(connection.execute("SELECT version FROM schema_version"))
 
-        assert len(rows) == 1
+        recorded = [int(r[0]) for r in rows]
+        assert set(recorded) == expected_versions
+        assert len(recorded) == len(set(recorded))
 
     def test_connect_context_manager_closes_connection(self, tmp_path: Path) -> None:
         db = Database(settings=_settings_for(tmp_path))
