@@ -1,7 +1,9 @@
 """M3 Metrics and KPI, and M4 Segmentation analytics.
 
-Hosts the analytics services declared in the architecture diagram. M3 is implemented here. M4 keeps
-a locked stub signature so the segmentation branch can replace it without changing M3.
+Hosts the analytics services declared in the architecture diagram. M3 produces per-metric
+DataFrames and dictionaries from a cleaned M7 frame. M4 fits K-Means on the M3 RFM table and
+left-merges a per-customer sensitivity frame so a single DataFrame carries both the segmentation
+and its fairness posture.
 
 Design notes:
 
@@ -25,7 +27,7 @@ from typing import TYPE_CHECKING, Any, Final
 import numpy as np
 import pandas as pd
 from sklearn.cluster import KMeans
-from sklearn.metrics import silhouette_score
+from sklearn.metrics import adjusted_rand_score, silhouette_score
 from sklearn.preprocessing import StandardScaler
 
 from src.access import enforce_small_group
@@ -40,21 +42,33 @@ if TYPE_CHECKING:
 # Contracts and constants
 # --------------------------------------------------------------------------- #
 
-_REQUIRED_COLUMNS: Final[frozenset[str]] = frozenset(
-    {
-        "InvoiceNo",
-        "StockCode",
-        "Description",
-        "Quantity",
-        "InvoiceDate",
-        "UnitPrice",
-        "CustomerID",
-        "Country",
-        "IsReturn",
-        "IsAdjustment",
-        "Revenue",
-    }
-)
+# Per-metric column requirements. Each metric declares the columns it
+# actually reads from the cleaned frame. The presentation layer (M1 + M2)
+# routes a role-scoped frame from M7 to a metric, so a viewer that lacks
+# CustomerID must still be able to run revenue_summary, product_metrics,
+# time_series, and country_metrics without a spurious missing-column
+# error. rfm_segments and repeat_rate name CustomerID explicitly and will
+# correctly refuse a viewer-scoped frame.
+_REQUIRED_BY_METRIC: Final[dict[str, frozenset[str]]] = {
+    "revenue_summary": frozenset(
+        {"InvoiceNo", "IsReturn", "IsAdjustment", "Revenue"}
+    ),
+    "product_metrics": frozenset(
+        {"StockCode", "Description", "Quantity", "IsReturn", "IsAdjustment", "Revenue"}
+    ),
+    "time_series": frozenset(
+        {"InvoiceNo", "InvoiceDate", "IsReturn", "IsAdjustment", "Revenue"}
+    ),
+    "country_metrics": frozenset(
+        {"InvoiceNo", "Country", "IsReturn", "IsAdjustment", "Revenue"}
+    ),
+    "repeat_rate": frozenset(
+        {"InvoiceNo", "CustomerID", "IsReturn", "IsAdjustment"}
+    ),
+    "rfm_segments": frozenset(
+        {"CustomerID", "InvoiceDate", "InvoiceNo", "IsReturn", "IsAdjustment", "Revenue"}
+    ),
+}
 
 _DEFAULT_TOP_N: Final[int] = 10
 
@@ -66,6 +80,23 @@ _KMEANS_N_INIT: Final[int] = 10
 _MIN_CUSTOMERS_FOR_CLUSTERING: Final[int] = 10
 _RFM_COLUMNS: Final[tuple[str, ...]] = ("recency", "frequency", "monetary")
 
+# M4 fairness sensitivity check. The holdout refit uses its own seed so the
+# holdout partition is reproducible without disturbing the main fit's seed.
+_HOLDOUT_RANDOM_STATE: Final[int] = 202607111528
+_MIN_HOLDOUT_SIZE: Final[int] = 2
+_MIN_TRAIN_FOR_HOLDOUT: Final[int] = _MIN_CUSTOMERS_FOR_CLUSTERING
+
+# Sensitivity columns appended to the RFM output by a left join on CustomerID.
+# Order matches the merge target so the final frame reads recency, frequency,
+# monetary, cluster, then the five stability fields.
+_STABILITY_COLUMNS: Final[tuple[str, ...]] = (
+    "stability_score",
+    "stability_holdout_size",
+    "stability_threshold",
+    "stability_flag",
+    "stability_reason",
+)
+
 
 class AnalyticsError(Exception):
     """Raised when an analytics function receives a malformed frame."""
@@ -76,17 +107,25 @@ class AnalyticsError(Exception):
 # --------------------------------------------------------------------------- #
 
 
-def _require_columns(frame: pd.DataFrame) -> None:
-    """Fail fast if the cleaned-frame contract is violated."""
+def _require_columns(frame: pd.DataFrame, metric: str) -> None:
+    """Fail fast if the cleaned-frame contract is violated for this metric.
+
+    Each metric declares its own column requirements in _REQUIRED_BY_METRIC`. The error message
+    names the metric so a viewer-scoped frame denied by rfm_segments produces a clear cause.
+    """
 
     if not isinstance(frame, pd.DataFrame):
         raise AnalyticsError("analytics functions require a pandas DataFrame")
 
-    missing = _REQUIRED_COLUMNS - set(frame.columns)
+    required = _REQUIRED_BY_METRIC.get(metric)
+    if required is None:
+        raise AnalyticsError(f"unknown metric: {metric!r}")
+
+    missing = required - set(frame.columns)
     if missing:
         # Sort for deterministic error messages that read cleanly in a diff.
         missing_list = ", ".join(sorted(missing))
-        raise AnalyticsError(f"missing required columns: {missing_list}")
+        raise AnalyticsError(f"{metric} missing required columns: {missing_list}")
 
 
 def _non_adjustment(frame: pd.DataFrame) -> pd.DataFrame:
@@ -124,7 +163,7 @@ def revenue_summary(
         Numeric values are converted to native Python types.
     """
 
-    _require_columns(frame)
+    _require_columns(frame, "revenue_summary")
 
     non_adj = _non_adjustment(frame)
     positives = non_adj.loc[~non_adj["IsReturn"].fillna(False).astype(bool)]
@@ -181,7 +220,7 @@ def product_metrics(
         ValueError: If top_n is not positive.
     """
 
-    _require_columns(frame)
+    _require_columns(frame, "product_metrics")
     if top_n <= 0:
         raise AnalyticsError("top_n must be a positive integer")
 
@@ -282,7 +321,7 @@ def time_series(
         Sunday.
     """
 
-    _require_columns(frame)
+    _require_columns(frame, "time_series")
 
     non_adj = _non_adjustment(frame).copy()
     # Coerce dates before dropping rows. Missing dates drop those rows from the time series but
@@ -350,7 +389,7 @@ def country_metrics(
 ) -> pd.DataFrame:
     """Return net revenue and order counts per country, sorted by revenue."""
 
-    _require_columns(frame)
+    _require_columns(frame, "country_metrics")
 
     non_adj = _non_adjustment(frame).copy()
     if non_adj.empty:
@@ -406,7 +445,7 @@ def repeat_rate(
         when there are no identified customers.
     """
 
-    _require_columns(frame)
+    _require_columns(frame, "repeat_rate")
 
     non_adj = _non_adjustment(frame)
     positives = non_adj.loc[~non_adj["IsReturn"].fillna(False).astype(bool)]
@@ -448,11 +487,10 @@ def rfm_segments(
     actor: "Actor | None" = None,
     audit_log: AuditLog | None = None,
 ) -> pd.DataFrame:
-    """Compute RFM scores and K-Means segments.
+    """Compute RFM scores and K-Means segments with a fairness-sensitivity join.
 
     Args:
-        frame: Cleaned DataFrame conforming to the M10 output contract. CustomerID is expected to
-            contain M6 pseudonyms, not raw identifiers.
+        frame: Cleaned and pseudonymized DataFrame from M7 output.
         k: Number of clusters to fit. Must be at least 2 and less than the number of identified
             customers.
         settings: Application settings. Required unless threshold is supplied.
@@ -462,18 +500,25 @@ def rfm_segments(
             suppressed clusters are audited as access denials.
 
     Returns:
-        DataFrame with CustomerID, recency, frequency, monetary, and cluster columns.
-        Clusters below the small-group threshold are removed. If there are too few identified
-        customers, an empty five-column DataFrame is returned and clustering is not attempted.
+        DataFrame with RFM, cluster, and stability columns. The output includes CustomerID,
+        recency, frequency, monetary, cluster, stability_score, stability_holdout_size,
+        stability_threshold, stability_flag, and stability_reason.
+
+        Clusters below the small-group threshold are removed before the join. If there are
+        too few identified customers to cluster, an empty ten-column DataFrame is returned
+        and clustering is not attempted.
 
     Raises:
         AnalyticsError: If the frame contract is violated, k is out of range, or too few customers
             are present for the requested k.
     """
 
-    _require_columns(frame)
+    _require_columns(frame, "rfm_segments")
     if k < 2:
         raise AnalyticsError("k must be >= 2")
+
+    holdout_fraction = _resolve_holdout_fraction(settings)
+    stability_threshold = _resolve_stability_threshold(settings)
 
     rfm = _compute_rfm(frame)
     if rfm.empty or len(rfm) < _MIN_CUSTOMERS_FOR_CLUSTERING:
@@ -481,9 +526,24 @@ def rfm_segments(
             audit_log,
             actor=actor,
             resource="rfm_segments",
-            details={"customers": int(len(rfm)), "suppressed_reason": "too_few_customers"},
+            details={
+                "customers": int(len(rfm)),
+                "suppressed_reason": "too_few_customers",
+                "stability_score": None,
+                "stability_holdout_size": 0,
+                "stability_flag": None,
+                "stability_reason": "too_few_customers",
+            },
         )
-        return _empty_rfm_output()
+        return _merge_stability(
+            _empty_rfm_output(),
+            customer_ids=(),
+            score=None,
+            holdout_size=0,
+            threshold=stability_threshold,
+            flag=None,
+            reason="too_few_customers",
+        )
 
     if k >= len(rfm):
         raise AnalyticsError(f"k={k} is not less than the number of customers ({len(rfm)})")
@@ -517,11 +577,35 @@ def rfm_segments(
                 "silhouette": None,
                 "clusters_suppressed": 0,
                 "suppressed_reason": "degenerate_single_cluster",
+                "stability_score": None,
+                "stability_holdout_size": 0,
+                "stability_flag": None,
+                "stability_reason": "degenerate_single_cluster",
             },
         )
-        return rfm[["CustomerID", *_RFM_COLUMNS, "cluster"]]
+        return _merge_stability(
+            rfm[["CustomerID", *_RFM_COLUMNS, "cluster"]],
+            customer_ids=rfm["CustomerID"].tolist(),
+            score=None,
+            holdout_size=0,
+            threshold=stability_threshold,
+            flag=None,
+            reason="degenerate_single_cluster",
+        )
 
     silhouette = float(silhouette_score(scaled, labels))
+
+    stability_score, holdout_size, stability_reason = _compute_stability(
+        scaled=scaled,
+        full_labels=labels,
+        k=k,
+        holdout_fraction=holdout_fraction,
+    )
+    stability_flag: bool | None
+    if stability_score is None:
+        stability_flag = None
+    else:
+        stability_flag = bool(stability_score >= stability_threshold)
 
     # Suppress clusters below the configured small-group threshold. Each dropped cluster is
     # audited by enforce_small_group as ACCESS_DENIED.
@@ -555,9 +639,23 @@ def rfm_segments(
             "kept_customers": int(len(rfm)),
             "silhouette": round(silhouette, 4),
             "clusters_suppressed": len(suppressed),
+            "stability_score": (
+                None if stability_score is None else round(stability_score, 4)
+            ),
+            "stability_holdout_size": int(holdout_size),
+            "stability_flag": stability_flag,
+            "stability_reason": stability_reason,
         },
     )
-    return rfm[["CustomerID", *_RFM_COLUMNS, "cluster"]]
+    return _merge_stability(
+        rfm[["CustomerID", *_RFM_COLUMNS, "cluster"]],
+        customer_ids=rfm["CustomerID"].tolist(),
+        score=stability_score,
+        holdout_size=holdout_size,
+        threshold=stability_threshold,
+        flag=stability_flag,
+        reason=stability_reason,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -609,6 +707,11 @@ def _compute_rfm(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _empty_rfm_output() -> pd.DataFrame:
+    """Return an empty five-column RFM frame with the documented dtypes.
+
+    The merge helper adds the five sensitivity columns on top of this base.
+    """
+
     return pd.DataFrame(
         {
             "CustomerID": pd.Series(dtype="object"),
@@ -616,6 +719,148 @@ def _empty_rfm_output() -> pd.DataFrame:
             "frequency": pd.Series(dtype="int64"),
             "monetary": pd.Series(dtype="float64"),
             "cluster": pd.Series(dtype="int64"),
+        }
+    )
+
+
+# --------------------------------------------------------------------------- #
+# M4 fairness sensitivity helpers
+# --------------------------------------------------------------------------- #
+
+
+def _resolve_holdout_fraction(settings: "Settings | None") -> float:
+    """Return the configured holdout fraction, falling back to 0.1 without settings."""
+
+    if settings is None:
+        return 0.1
+    return float(settings.rfm_holdout_fraction)
+
+
+def _resolve_stability_threshold(settings: "Settings | None") -> float:
+    """Return the configured stability threshold, falling back to 0.7 without settings."""
+
+    if settings is None:
+        return 0.7
+    return float(settings.rfm_stability_threshold)
+
+
+def _compute_stability(
+    *,
+    scaled: np.ndarray,
+    full_labels: np.ndarray,
+    k: int,
+    holdout_fraction: float,
+) -> tuple[float | None, int, str | None]:
+    """Return clustering stability from a holdout refit.
+
+    Refit K-Means on the training partition, predict labels for all customers,
+    and compare those labels with the original fit using adjusted Rand index.
+
+    Returns:
+        Tuple of score, holdout_size, and reason. score is None when the check
+        is skipped. reason is None on a normal run.
+    """
+
+    n_customers = int(scaled.shape[0])
+    holdout_size = int(round(n_customers * holdout_fraction))
+    train_size = n_customers - holdout_size
+
+    if holdout_size < _MIN_HOLDOUT_SIZE or train_size < _MIN_TRAIN_FOR_HOLDOUT or train_size <= k:
+        return None, 0, "insufficient_customers_for_holdout"
+
+    rng = np.random.default_rng(_HOLDOUT_RANDOM_STATE)
+    permutation = rng.permutation(n_customers)
+    train_index = permutation[:train_size]
+    train_matrix = scaled[train_index]
+
+    refit_model = KMeans(
+        n_clusters=k,
+        n_init=_KMEANS_N_INIT,
+        random_state=_KMEANS_RANDOM_STATE,
+    )
+    refit_model.fit(train_matrix)
+    refit_labels = refit_model.predict(scaled)
+
+    if np.unique(refit_labels).size < 2:
+        # Degenerate refit. Treat the stability check as skipped.
+        return None, holdout_size, "insufficient_customers_for_holdout"
+
+    score = float(adjusted_rand_score(full_labels, refit_labels))
+    return score, holdout_size, None
+
+
+def _merge_stability(
+    segments: pd.DataFrame,
+    *,
+    customer_ids: "list[Any] | tuple[Any, ...]",
+    score: float | None,
+    holdout_size: int,
+    threshold: float,
+    flag: bool | None,
+    reason: str | None,
+) -> pd.DataFrame:
+    """Join stability fields onto each segmented customer.
+
+    Stability values describe the whole fit, but storing them per row keeps the
+    fields attached through downstream filters, groupbys, concats, and merges.
+    """
+
+    sensitivity = _build_sensitivity_frame(
+        customer_ids=customer_ids,
+        score=score,
+        holdout_size=holdout_size,
+        threshold=threshold,
+        flag=flag,
+        reason=reason,
+    )
+    merged = segments.merge(sensitivity, on="CustomerID", how="left")
+    return merged
+
+
+def _build_sensitivity_frame(
+    *,
+    customer_ids: "list[Any] | tuple[Any, ...]",
+    score: float | None,
+    holdout_size: int,
+    threshold: float,
+    flag: bool | None,
+    reason: str | None,
+) -> pd.DataFrame:
+    """Build one stability row per customer."""
+
+    row_count = len(customer_ids)
+    reason_text = "" if reason is None else str(reason)
+    if row_count == 0:
+        return pd.DataFrame(
+            {
+                "CustomerID": pd.Series(dtype="object"),
+                "stability_score": pd.Series(dtype="float64"),
+                "stability_holdout_size": pd.Series(dtype="int64"),
+                "stability_threshold": pd.Series(dtype="float64"),
+                "stability_flag": pd.Series(dtype="object"),
+                "stability_reason": pd.Series(dtype="object"),
+            }
+        )
+    score_value = float("nan") if score is None else float(score)
+    return pd.DataFrame(
+        {
+            "CustomerID": list(customer_ids),
+            "stability_score": pd.Series(
+                [score_value] * row_count, dtype="float64"
+            ),
+            "stability_holdout_size": pd.Series(
+                [int(holdout_size)] * row_count, dtype="int64"
+            ),
+            "stability_threshold": pd.Series(
+                [float(threshold)] * row_count, dtype="float64"
+            ),
+            "stability_flag": pd.Series(
+                [None if flag is None else bool(flag)] * row_count,
+                dtype="object",
+            ),
+            "stability_reason": pd.Series(
+                [reason_text] * row_count, dtype="object"
+            ),
         }
     )
 

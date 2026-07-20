@@ -325,7 +325,18 @@ def rfm_scatter(segments: pd.DataFrame) -> ExplainedChart:
 
     if not isinstance(segments, pd.DataFrame):
         raise VisualizationError("rfm_scatter expects the DataFrame returned by rfm_segments")
-    required = {"CustomerID", "recency", "frequency", "monetary", "cluster"}
+    required = {
+        "CustomerID",
+        "recency",
+        "frequency",
+        "monetary",
+        "cluster",
+        "stability_score",
+        "stability_holdout_size",
+        "stability_threshold",
+        "stability_flag",
+        "stability_reason",
+    }
     missing = required.difference(segments.columns)
     if missing:
         raise VisualizationError(
@@ -360,20 +371,30 @@ def rfm_scatter(segments: pd.DataFrame) -> ExplainedChart:
         figure.update_layout(height=420, legend_title_text="Cluster")
 
     cluster_count = int(segments["cluster"].nunique()) if not segments.empty else 0
+    stability = _describe_stability(segments)
+    formula = (
+        "RFM segments group customers by recency, frequency, and monetary value. "
+        "The chart plots recency against monetary value, sizes markers by frequency, "
+        "and colors markers by segment. " + stability["prose"]
+    )
+    exclusions: dict[str, Any] = {
+        "small_group_clusters": 0,
+        "clusters_rendered": cluster_count,
+        "stability_score": stability["score"],
+        "stability_flag": stability["flag"],
+        "stability_holdout_size": stability["holdout_size"],
+        "stability_reason": stability["reason"],
+    }
     return ExplainedChart(
         kind=ChartKind.RFM_SCATTER,
         figure=figure,
-        formula=(
-            "RFM segments group customers by recency, frequency, and monetary value. "
-            "The chart plots recency against monetary value, sizes markers by frequency, "
-            "and colors markers by segment."
-        ),
+        formula=formula,
         filters={
             "guest_checkouts": "excluded from clustering",
             "adjustments": "excluded from monetary",
             "returns": "netted into monetary",
         },
-        exclusions={"small_group_clusters": 0, "clusters_rendered": cluster_count},
+        exclusions=exclusions,
         row_count=int(len(segments)),
     )
 
@@ -515,6 +536,81 @@ def _revenue_exclusions(
         exclusions["returns_value"] = int(round(float(revenue_payload["returns_value"])))
     return exclusions
 
+
+def _describe_stability(segments: pd.DataFrame) -> dict[str, Any]:
+    """Return stability metadata and caption text from an RFM segment frame.
+
+    stability_* values are constant across rows, so the first row is enough when the columns
+    are present. Empty frames and older test frames without stability columns return a neutral
+    skipped-check description.
+    """
+
+    score: float | None = None
+    flag: bool | None = None
+    holdout_size = 0
+    reason: str | None = None
+
+
+    if segments.empty:
+        prose = (
+            "Cluster stability check was not run because the segmentation "
+            "returned no customers."
+        )
+        return {
+            "score": None,
+            "flag": None,
+            "holdout_size": 0,
+            "reason": None,
+            "prose": prose,
+        }
+
+    raw_score = segments["stability_score"].iloc[0]
+    if pd.notna(raw_score):
+        score = float(raw_score)
+    raw_flag = segments["stability_flag"].iloc[0]
+    if raw_flag is not None and pd.notna(raw_flag):
+        flag = bool(raw_flag)
+    raw_holdout = segments["stability_holdout_size"].iloc[0]
+    if pd.notna(raw_holdout):
+        holdout_size = int(raw_holdout)
+    raw_reason = segments["stability_reason"].iloc[0]
+    if isinstance(raw_reason, str) and raw_reason:
+        reason = raw_reason
+
+    if score is None:
+        if reason == "too_few_customers":
+            prose = (
+                "Cluster stability check was skipped because too few identified "
+                "customers were present to fit segments."
+            )
+        elif reason == "degenerate_single_cluster":
+            prose = (
+                "Cluster stability check was skipped because K-Means collapsed "
+                "to a single cluster."
+            )
+        elif reason == "insufficient_customers_for_holdout":
+            prose = (
+                "Cluster stability check was skipped because the sample was too "
+                "small to hold out a stable validation partition."
+            )
+        else:
+            prose = "Cluster stability check was not run for this result."
+    else:
+        adjective = "stable" if flag else "unstable"
+        prose = (
+            f"Cluster stability: {score:.2f} adjusted Rand index against a "
+            f"{holdout_size}-customer holdout refit ({adjective}). "
+            "Treat groupings as tentative when the score is below the configured threshold."
+        )
+
+    return {
+        "score": score,
+        "flag": flag,
+        "holdout_size": holdout_size,
+        "reason": reason,
+        "prose": prose,
+    }
+    
 
 def _guest_count(repeat_payload: Mapping[str, Any]) -> int:
     """Return unidentified customer count from repeat payload."""
