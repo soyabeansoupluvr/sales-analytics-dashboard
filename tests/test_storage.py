@@ -62,7 +62,7 @@ def audit_log(settings: Settings) -> AuditLog:
 
 @pytest.fixture
 def sample_frame() -> pd.DataFrame:
-    """A pseudonymized-shape frame with the columns downstream views expect."""
+    """A cleaned + pseudonymized frame with the columns downstream views expect."""
 
     return pd.DataFrame(
         {
@@ -74,6 +74,9 @@ def sample_frame() -> pd.DataFrame:
             "UnitPrice": [1.5, 2.5, 1.5, 3.0],
             "CustomerID": ["ps_a", "ps_b", "ps_a", "ps_c"],
             "Country": ["UK", "UK", "US", "UK"],
+            "IsReturn": [False, False, False, False],
+            "IsAdjustment": [False, False, False, False],
+            "Revenue": [1.5, 5.0, 4.5, 12.0],
         }
     )
 
@@ -243,6 +246,10 @@ def test_read_view_revenue_view_columns_for_analyst(
         "Quantity",
         "UnitPrice",
         "Country",
+        "Revenue",
+        "IsReturn",
+        "IsAdjustment",
+        "CustomerID",
     }
 
 
@@ -254,7 +261,15 @@ def test_read_view_products_view_columns(
 ) -> None:
     write_snapshot(sample_frame, settings, snapshot_id="s1", audit_log=audit_log)
     out = read_view("products", admin, settings, snapshot_id="s1", audit_log=audit_log)
-    assert set(out.columns) == {"StockCode", "Description", "Quantity", "UnitPrice"}
+    assert set(out.columns) == {
+        "StockCode",
+        "Description",
+        "Quantity",
+        "UnitPrice",
+        "Revenue",
+        "IsReturn",
+        "IsAdjustment",
+    }
 
 
 def test_read_view_unknown_view_raises_storage_error(
@@ -294,7 +309,7 @@ def test_write_snapshot_writes_audit_entry(
     assert row.resource == "20260101T000000Z"
     assert row.actor == "pipeline"
     assert row.details["rows"] == 4
-    assert row.details["columns"] == 8
+    assert row.details["columns"] == 11
 
 
 def test_read_view_denial_writes_only_the_authorize_entry(
