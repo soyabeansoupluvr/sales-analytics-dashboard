@@ -4,10 +4,6 @@ Hosts the analytics services declared in the architecture diagram. M3 produces p
 DataFrames and dictionaries from a cleaned M7 frame. M4 fits K-Means on the M3 RFM table and
 left-merges a per-customer sensitivity frame so a single DataFrame carries both the segmentation
 and its fairness posture.
-Hosts the analytics services declared in the architecture diagram. M3 produces per-metric
-DataFrames and dictionaries from a cleaned M7 frame. M4 fits K-Means on the M3 RFM table and
-left-merges a per-customer sensitivity frame so a single DataFrame carries both the segmentation
-and its fairness posture.
 
 Design notes:
 
@@ -31,7 +27,6 @@ from typing import TYPE_CHECKING, Any, Final
 import numpy as np
 import pandas as pd
 from sklearn.cluster import KMeans
-from sklearn.metrics import adjusted_rand_score, silhouette_score
 from sklearn.metrics import adjusted_rand_score, silhouette_score
 from sklearn.preprocessing import StandardScaler
 
@@ -94,23 +89,6 @@ _STABILITY_COLUMNS: Final[tuple[str, ...]] = (
     "stability_reason",
 )
 
-# M4 fairness sensitivity check. The holdout refit uses its own seed so the
-# holdout partition is reproducible without disturbing the main fit's seed.
-_HOLDOUT_RANDOM_STATE: Final[int] = 202607111528
-_MIN_HOLDOUT_SIZE: Final[int] = 2
-_MIN_TRAIN_FOR_HOLDOUT: Final[int] = _MIN_CUSTOMERS_FOR_CLUSTERING
-
-# Sensitivity columns appended to the RFM output by a left join on CustomerID.
-# Order matches the merge target so the final frame reads recency, frequency,
-# monetary, cluster, then the five stability fields.
-_STABILITY_COLUMNS: Final[tuple[str, ...]] = (
-    "stability_score",
-    "stability_holdout_size",
-    "stability_threshold",
-    "stability_flag",
-    "stability_reason",
-)
-
 
 class AnalyticsError(Exception):
     """Raised when an analytics function receives a malformed frame."""
@@ -127,12 +105,6 @@ def _require_columns(frame: pd.DataFrame, metric: str) -> None:
     Each metric declares its own column requirements in _REQUIRED_BY_METRIC`. The error message
     names the metric so a viewer-scoped frame denied by rfm_segments produces a clear cause.
     """
-def _require_columns(frame: pd.DataFrame, metric: str) -> None:
-    """Fail fast if the cleaned-frame contract is violated for this metric.
-
-    Each metric declares its own column requirements in _REQUIRED_BY_METRIC`. The error message
-    names the metric so a viewer-scoped frame denied by rfm_segments produces a clear cause.
-    """
 
     if not isinstance(frame, pd.DataFrame):
         raise AnalyticsError("analytics functions require a pandas DataFrame")
@@ -142,15 +114,9 @@ def _require_columns(frame: pd.DataFrame, metric: str) -> None:
         raise AnalyticsError(f"unknown metric: {metric!r}")
 
     missing = required - set(frame.columns)
-    required = _REQUIRED_BY_METRIC.get(metric)
-    if required is None:
-        raise AnalyticsError(f"unknown metric: {metric!r}")
-
-    missing = required - set(frame.columns)
     if missing:
         # Sort for deterministic error messages that read cleanly in a diff.
         missing_list = ", ".join(sorted(missing))
-        raise AnalyticsError(f"{metric} missing required columns: {missing_list}")
         raise AnalyticsError(f"{metric} missing required columns: {missing_list}")
 
 
@@ -189,7 +155,6 @@ def revenue_summary(
         Numeric values are converted to native Python types.
     """
 
-    _require_columns(frame, "revenue_summary")
     _require_columns(frame, "revenue_summary")
 
     non_adj = _non_adjustment(frame)
@@ -247,7 +212,6 @@ def product_metrics(
         ValueError: If top_n is not positive.
     """
 
-    _require_columns(frame, "product_metrics")
     _require_columns(frame, "product_metrics")
     if top_n <= 0:
         raise AnalyticsError("top_n must be a positive integer")
@@ -350,7 +314,6 @@ def time_series(
     """
 
     _require_columns(frame, "time_series")
-    _require_columns(frame, "time_series")
 
     non_adj = _non_adjustment(frame).copy()
     # Coerce dates before dropping rows. Missing dates drop those rows from the time series but
@@ -419,7 +382,6 @@ def country_metrics(
     """Return net revenue and order counts per country, sorted by revenue."""
 
     _require_columns(frame, "country_metrics")
-    _require_columns(frame, "country_metrics")
 
     non_adj = _non_adjustment(frame).copy()
     if non_adj.empty:
@@ -476,7 +438,6 @@ def repeat_rate(
     """
 
     _require_columns(frame, "repeat_rate")
-    _require_columns(frame, "repeat_rate")
 
     non_adj = _non_adjustment(frame)
     positives = non_adj.loc[~non_adj["IsReturn"].fillna(False).astype(bool)]
@@ -519,10 +480,8 @@ def rfm_segments(
     audit_log: AuditLog | None = None,
 ) -> pd.DataFrame:
     """Compute RFM scores and K-Means segments with a fairness-sensitivity join.
-    """Compute RFM scores and K-Means segments with a fairness-sensitivity join.
 
     Args:
-        frame: Cleaned and pseudonymized DataFrame from M7 output.
         frame: Cleaned and pseudonymized DataFrame from M7 output.
         k: Number of clusters to fit. Must be at least 2 and less than the number of identified
             customers.
@@ -540,13 +499,6 @@ def rfm_segments(
         Clusters below the small-group threshold are removed before the join. If there are
         too few identified customers to cluster, an empty ten-column DataFrame is returned
         and clustering is not attempted.
-        DataFrame with RFM, cluster, and stability columns. The output includes CustomerID,
-        recency, frequency, monetary, cluster, stability_score, stability_holdout_size,
-        stability_threshold, stability_flag, and stability_reason.
-
-        Clusters below the small-group threshold are removed before the join. If there are
-        too few identified customers to cluster, an empty ten-column DataFrame is returned
-        and clustering is not attempted.
 
     Raises:
         AnalyticsError: If the frame contract is violated, k is out of range, or too few customers
@@ -554,12 +506,8 @@ def rfm_segments(
     """
 
     _require_columns(frame, "rfm_segments")
-    _require_columns(frame, "rfm_segments")
     if k < 2:
         raise AnalyticsError("k must be >= 2")
-
-    holdout_fraction = _resolve_holdout_fraction(settings)
-    stability_threshold = _resolve_stability_threshold(settings)
 
     holdout_fraction = _resolve_holdout_fraction(settings)
     stability_threshold = _resolve_stability_threshold(settings)
@@ -578,23 +526,6 @@ def rfm_segments(
                 "stability_flag": None,
                 "stability_reason": "too_few_customers",
             },
-            details={
-                "customers": int(len(rfm)),
-                "suppressed_reason": "too_few_customers",
-                "stability_score": None,
-                "stability_holdout_size": 0,
-                "stability_flag": None,
-                "stability_reason": "too_few_customers",
-            },
-        )
-        return _merge_stability(
-            _empty_rfm_output(),
-            customer_ids=(),
-            score=None,
-            holdout_size=0,
-            threshold=stability_threshold,
-            flag=None,
-            reason="too_few_customers",
         )
         return _merge_stability(
             _empty_rfm_output(),
@@ -642,20 +573,7 @@ def rfm_segments(
                 "stability_holdout_size": 0,
                 "stability_flag": None,
                 "stability_reason": "degenerate_single_cluster",
-                "stability_score": None,
-                "stability_holdout_size": 0,
-                "stability_flag": None,
-                "stability_reason": "degenerate_single_cluster",
             },
-        )
-        return _merge_stability(
-            rfm[["CustomerID", *_RFM_COLUMNS, "cluster"]],
-            customer_ids=rfm["CustomerID"].tolist(),
-            score=None,
-            holdout_size=0,
-            threshold=stability_threshold,
-            flag=None,
-            reason="degenerate_single_cluster",
         )
         return _merge_stability(
             rfm[["CustomerID", *_RFM_COLUMNS, "cluster"]],
@@ -668,18 +586,6 @@ def rfm_segments(
         )
 
     silhouette = float(silhouette_score(scaled, labels))
-
-    stability_score, holdout_size, stability_reason = _compute_stability(
-        scaled=scaled,
-        full_labels=labels,
-        k=k,
-        holdout_fraction=holdout_fraction,
-    )
-    stability_flag: bool | None
-    if stability_score is None:
-        stability_flag = None
-    else:
-        stability_flag = bool(stability_score >= stability_threshold)
 
     stability_score, holdout_size, stability_reason = _compute_stability(
         scaled=scaled,
@@ -730,15 +636,6 @@ def rfm_segments(
             "stability_flag": stability_flag,
             "stability_reason": stability_reason,
         },
-    )
-    return _merge_stability(
-        rfm[["CustomerID", *_RFM_COLUMNS, "cluster"]],
-        customer_ids=rfm["CustomerID"].tolist(),
-        score=stability_score,
-        holdout_size=holdout_size,
-        threshold=stability_threshold,
-        flag=stability_flag,
-        reason=stability_reason,
     )
     return _merge_stability(
         rfm[["CustomerID", *_RFM_COLUMNS, "cluster"]],
@@ -800,11 +697,6 @@ def _compute_rfm(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _empty_rfm_output() -> pd.DataFrame:
-    """Return an empty five-column RFM frame with the documented dtypes.
-
-    The merge helper adds the five sensitivity columns on top of this base.
-    """
-
     """Return an empty five-column RFM frame with the documented dtypes.
 
     The merge helper adds the five sensitivity columns on top of this base.

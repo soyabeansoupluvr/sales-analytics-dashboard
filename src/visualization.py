@@ -415,13 +415,11 @@ def rfm_scatter(segments: pd.DataFrame) -> ExplainedChart:
         kind=ChartKind.RFM_SCATTER,
         figure=figure,
         formula=formula,
-        formula=formula,
         filters={
             "guest_checkouts": "excluded from clustering",
             "adjustments": "excluded from monetary",
             "returns": "netted into monetary",
         },
-        exclusions=exclusions,
         exclusions=exclusions,
         row_count=int(len(segments)),
     )
