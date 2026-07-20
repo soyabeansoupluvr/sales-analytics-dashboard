@@ -419,7 +419,12 @@ def _resolve_source(settings: Settings) -> Path:
     if isinstance(override, (str, Path)):
         return Path(override)
     # Convention: the pipeline writes raw uploads to data/raw/uci_retail.csv.
-    return Path(settings.data_raw_dir) / "uci_retail.csv"
+    raw_dir = Path(settings.data_raw_dir)
+    for suffix in (".xlsx", ".csv"):
+        candidates = sorted(raw_dir.glob(f"*{suffix}"))
+        if candidates:
+            return candidates[0]
+    return raw_dir / "demo.csv"
 
 
 def _country_options(frame: pd.DataFrame) -> list[str]:
@@ -511,8 +516,7 @@ def _render_tab(  # pragma: no cover - Streamlit rendering path
     if not tab_permitted_for_role(tab, role):
         st.info(
             f"The {tab.label} tab is available to authenticated analysts and "
-            "administrators. Use the sidebar login (analyst/1111, mgr/2222, "
-            "or adm/3457) to access customer-level analyses."
+            "administrators. Use the sidebar login to access customer-level analyses."
         )
         return
 
@@ -683,7 +687,7 @@ def _run_app() -> None:  # pragma: no cover - Streamlit entry point
     )
     st.title("Interactive Sales Analytics Dashboard")
     st.caption(
-        "MSIT 5290 Capstone - Rev. Drew Brown. Analytics from M3/M4, "
+        "MSIT 5910 Capstone - Rev. Drew Brown. Analytics from M3/M4, "
         "charts from M5, access control from M7/M8, authentication "
         "from streamlit-authenticator."
     )
