@@ -4,6 +4,7 @@ These tests verify that every module can be imported without side effects.
 Concrete unit tests for each M-module are added alongside the corresponding
 feature branches (feature/m6-pseudonymize, feature/m9-ingestion, ...).
 """
+
 import importlib
 
 import pytest

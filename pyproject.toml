@@ -1,0 +1,32 @@
+# Project-wide tool configuration.
+#
+# Kept intentionally small: default settings are used across flake8, black,
+# pytest and coverage unless settings must align across tools.
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = "-q"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["src"]
+omit = [
+    "src/app.py",   # Streamlit entry point — exercised only in the app.
+    "src/__init__.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+precision = 1
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+]
