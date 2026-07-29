@@ -169,7 +169,7 @@ _ROLE_RANK: Final[Mapping[Role, int]] = {"viewer": 1, "analyst": 2, "admin": 3}
 
 _COOKIE_NAME: Final[str] = "sales_dashboard_auth"
 _COOKIE_KEY: Final[str] = "capstone-demo-cookie-key-not-a-secret"
-_COOKIE_EXPIRY_DAYS: Final[float] = 1.0
+_COOKIE_EXPIRY_DAYS: Final[float] = 0.0  # No persistent cookies; session ends when browser closes.
 
 
 # --------------------------------------------------------------------------- #
@@ -766,11 +766,7 @@ def _run_app() -> None:  # pragma: no cover - Streamlit entry point
         layout="wide",
     )
     st.title("Interactive Sales Analytics Dashboard")
-    st.caption(
-        "MSIT 5910 Capstone - Rev. Drew Brown. Analytics from M3/M4, "
-        "charts from M5, access control from M7/M8, authentication "
-        "from streamlit-authenticator."
-    )
+    st.caption("MSIT 5910 Capstone - Rev. Drew Brown.")
 
     settings = _resolve_settings()
 
