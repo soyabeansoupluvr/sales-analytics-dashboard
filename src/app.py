@@ -169,7 +169,7 @@ _ROLE_RANK: Final[Mapping[Role, int]] = {"viewer": 1, "analyst": 2, "admin": 3}
 
 _COOKIE_NAME: Final[str] = "sales_dashboard_auth"
 _COOKIE_KEY: Final[str] = "capstone-demo-cookie-key-not-a-secret"
-_COOKIE_EXPIRY_DAYS: Final[float] = 0.0 # No persistent cookies; session ends when browser closes.
+_COOKIE_EXPIRY_DAYS: Final[float] = 0.0  # No persistent cookies; session ends when browser closes.
 
 
 # --------------------------------------------------------------------------- #
