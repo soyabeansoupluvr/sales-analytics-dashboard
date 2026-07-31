@@ -22,9 +22,13 @@ from streamlit.testing.v1 import AppTest
 
 from src.access import Actor
 from src.app import (
+    _CHART_KIND_LABELS,
     _TAB_CATALOG,
     AnalysisChoice,
     TabDefinition,
+    _describe_exclusions,
+    _describe_filters,
+    _humanize_key,
     analyses_for_tab,
     dispatch_analysis,
     filter_frame,
@@ -36,7 +40,7 @@ from src.config import Settings
 from src.credentials import CredentialStore, UserRecord
 from src.logs import AuditLog, Database
 from src.storage import write_snapshot
-from src.visualization import ExplainedChart
+from src.visualization import ChartKind, ExplainedChart
 
 _KEY_HEX = "ab" * 32
 _APP_PATH = str(Path(__file__).resolve().parents[1] / "src" / "app.py")
@@ -264,9 +268,15 @@ class TestTabDefinition:
             label="Revenue",
             analyses=(AnalysisChoice("x", "X", "revenue", "viewer"),),
             minimum_role="viewer",
+            description="Shows revenue.",
         )
         with pytest.raises((AttributeError, TypeError)):
             tab.label = "no"  # type: ignore[misc]
+
+    def test_every_tab_has_a_non_empty_description(self) -> None:
+        for tab in _TAB_CATALOG:
+            assert isinstance(tab.description, str)
+            assert tab.description.strip()
 
 
 # --------------------------------------------------------------------------- #
@@ -407,6 +417,116 @@ class TestDispatchAnalysis:
     ) -> None:
         chart = dispatch_analysis("customer_segments", cleaned_frame, settings=settings)
         assert isinstance(chart, ExplainedChart)
+
+
+class TestHumanizeKey:
+    def test_replaces_underscores_and_capitalizes(self) -> None:
+        assert _humanize_key("missing_country") == "Missing country"
+
+
+class TestDescribeFilters:
+    def test_renders_each_entry_as_a_sentence(self) -> None:
+        text = _describe_filters({"adjustments": "excluded", "missing_dates": "excluded"})
+        assert text == "Adjustments excluded. Missing dates excluded."
+
+
+class TestDescribeExclusions:
+    def test_known_key_uses_its_phrase_template(self) -> None:
+        text = _describe_exclusions({"clusters_rendered": 3})
+        assert text == "3 customer segments are shown in this chart."
+
+    def test_zero_count_key_is_skipped(self) -> None:
+        text = _describe_exclusions({"adjustments": 0})
+        assert text == ""
+
+    def test_stability_keys_are_left_out_because_formula_already_covers_them(self) -> None:
+        text = _describe_exclusions(
+            {
+                "stability_score": 0.42,
+                "stability_flag": True,
+                "stability_holdout_size": 50,
+                "stability_reason": "too_few_customers",
+                "clusters_rendered": 4,
+            }
+        )
+        assert "stability" not in text.lower()
+        assert text == "4 customer segments are shown in this chart."
+
+    def test_unknown_key_falls_back_to_humanized_phrase(self) -> None:
+        text = _describe_exclusions({"some_new_metric": 7})
+        assert text == "Some new metric: 7."
+
+
+class TestChartKindLabels:
+    def test_every_chart_kind_has_a_human_readable_label(self) -> None:
+        for kind in ChartKind:
+            assert kind in _CHART_KIND_LABELS
+            assert _CHART_KIND_LABELS[kind]
+
+
+# --------------------------------------------------------------------------- #
+# AppTest - per-tab instructions and conditional filter visibility
+# --------------------------------------------------------------------------- #
+
+
+def test_apptest_shows_tab_instructions(
+    settings: Settings,
+    cleaned_frame: pd.DataFrame,
+    audit_log: AuditLog,
+    stub_store: CredentialStore,
+) -> None:
+    """Every tab renders its TabDefinition.description as a caption."""
+
+    _seed_snapshot(settings, cleaned_frame, audit_log)
+
+    app = AppTest.from_file(_APP_PATH, default_timeout=15)
+    app.session_state["__test_settings_override__"] = settings
+    app.session_state["__test_credential_store_override__"] = stub_store
+    app.run()
+    assert not app.exception, [str(e) for e in app.exception]
+
+    caption_texts = {c.value for c in app.caption}
+    for tab in _TAB_CATALOG:
+        assert tab.description in caption_texts
+
+
+def test_apptest_hides_filters_whose_backing_column_is_absent(
+    settings: Settings,
+    cleaned_frame: pd.DataFrame,
+    audit_log: AuditLog,
+    stub_store: CredentialStore,
+) -> None:
+    """Each tab only offers filter widgets for columns its view actually has.
+
+    Revenue has InvoiceDate and Country but not StockCode. Products has
+    StockCode but not InvoiceDate or Country. Time has InvoiceDate but not
+    Country or StockCode. A viewer never sees the Customers tab's widgets
+    because that tab renders a locked message instead of a form.
+    """
+
+    _seed_snapshot(settings, cleaned_frame, audit_log)
+
+    app = AppTest.from_file(_APP_PATH, default_timeout=15)
+    app.session_state["__test_settings_override__"] = settings
+    app.session_state["__test_credential_store_override__"] = stub_store
+    app.run()
+    assert not app.exception, [str(e) for e in app.exception]
+
+    date_keys = {d.key for d in app.date_input}
+    multiselect_keys = {m.key for m in app.multiselect}
+
+    assert {"start_revenue", "end_revenue"} <= date_keys
+    assert "countries_revenue" in multiselect_keys
+    assert "products_revenue" not in multiselect_keys
+
+    assert "start_products" not in date_keys
+    assert "end_products" not in date_keys
+    assert "countries_products" not in multiselect_keys
+    assert "products_products" in multiselect_keys
+
+    assert {"start_time", "end_time"} <= date_keys
+    assert "countries_time" not in multiselect_keys
+    assert "products_time" not in multiselect_keys
 
 
 # --------------------------------------------------------------------------- #

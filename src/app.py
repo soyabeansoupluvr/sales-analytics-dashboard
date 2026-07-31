@@ -1,26 +1,23 @@
 """Interactive Sales Analytics Dashboard — Streamlit entry point.
 
-Combines M1 UI layout and M2 presentation control. This layer composes the
-pipeline, storage, analytics, and visualization modules, but does not compute
-metrics or build figures directly.
+Combines M1 UI layout and M2 presentation control. This layer composes the pipeline, storage,
+analytics, and visualization modules, but does not compute metrics or build figures directly.
 
 Module flow:
 
 * M9, M10, and M6 ingest, clean, and pseudonymize the retail data.
 * M7 stores pseudonymized snapshots and gates reads through M8 access control.
 * M3 computes revenue, product, time, country, and repeat-rate metrics.
-* M4 computes RFM segments and attaches fairness-sensitivity metadata through
-  stability columns.
-* M5 renders metric outputs as ExplainedChart records with Plotly figures,
-  formulas, filters, and exclusions.
+* M4 computes RFM segments and attaches fairness-sensitivity metadata through stability columns.
+* M5 renders metric outputs as ExplainedChart records with Plotly figures, formulas, filters,
+  and exclusions.
 
-The layout follows the project design: Revenue, Products, Customers, and Time
-trends tabs. The Customers tab is visible to unauthenticated visitors but
-locked behind the analyst role.
+The layout follows the project design: Revenue, Products, Customers, and Time trends tabs.
+The Customers tab is visible to unauthenticated visitors but locked behind the analyst role.
 
-M2 reads the authenticated session, resolves the Actor, reads the role-scoped
-snapshot view, applies user-selected filters, and dispatches to the metric and
-chart helper for the selected analysis.
+M2 reads the authenticated session, resolves the Actor, reads the role-scoped snapshot view,
+applies user-selected filters, and dispatches to the metric and chart helper for the selected
+analysis.
 
 Author: Rev. Drew Brown
 Course: MSIT 5910 Capstone, University of the People (2026)
@@ -60,6 +57,7 @@ from src.logs import AuditLog, Database
 from src.pseudonymize import pseudonymize_column
 from src.storage import StorageError, list_snapshots, read_view, write_snapshot
 from src.visualization import (
+    ChartKind,
     ExplainedChart,
     country_bar,
     repeat_rate_gauge,
@@ -70,7 +68,7 @@ from src.visualization import (
 )
 
 # --------------------------------------------------------------------------- #
-# Load environment before touching Settings so PSEUDONYM_KEY is available.
+# Load .env before Settings so PSEUDONYM_KEY is available.
 # --------------------------------------------------------------------------- #
 load_dotenv()
 
@@ -98,10 +96,12 @@ class TabDefinition:
     label: str
     analyses: tuple[AnalysisChoice, ...]
     minimum_role: Role
+    description: str
 
 
-# Four dashboard tabs from the project design. The Customers tab is visible
-# but locked unless the caller has an analyst or admin role.
+# Four dashboard tabs from the project design. The Customers tab is visible but locked unless
+# the caller has an analyst or admin role. The description text introduces each tab before
+# the filter form.
 _TAB_CATALOG: Final[tuple[TabDefinition, ...]] = (
     TabDefinition(
         key="revenue",
@@ -111,12 +111,22 @@ _TAB_CATALOG: Final[tuple[TabDefinition, ...]] = (
             AnalysisChoice("country_revenue", "Country revenue", "revenue", "viewer"),
         ),
         minimum_role="viewer",
+        description=(
+            "Shows overall revenue trends and revenue broken down by country. "
+            "Pick an analysis below, optionally narrow the date range or select "
+            "specific countries, then select \u201cShow me the numbers.\u201d"
+        ),
     ),
     TabDefinition(
         key="products",
         label="Products",
         analyses=(AnalysisChoice("top_products", "Top products by revenue", "products", "viewer"),),
         minimum_role="viewer",
+        description=(
+            "Shows the top-selling products ranked by revenue. Optionally narrow "
+            "the results to specific stock codes, then select \u201cShow me the "
+            "numbers.\u201d"
+        ),
     ),
     TabDefinition(
         key="customers",
@@ -126,6 +136,12 @@ _TAB_CATALOG: Final[tuple[TabDefinition, ...]] = (
             AnalysisChoice("customer_segments", "Customer segments (RFM)", "customers", "analyst"),
         ),
         minimum_role="analyst",
+        description=(
+            "Shows the repeat-purchase rate and RFM customer segments. Available "
+            "only to signed-in analysts and administrators. Optionally narrow by "
+            "date range, country, product, or customer segment, then select "
+            "\u201cShow me the numbers.\u201d"
+        ),
     ),
     TabDefinition(
         key="time",
@@ -135,6 +151,10 @@ _TAB_CATALOG: Final[tuple[TabDefinition, ...]] = (
             AnalysisChoice("revenue_by_weekday", "Revenue by weekday", "time", "viewer"),
         ),
         minimum_role="viewer",
+        description=(
+            "Shows revenue trends by month and by day of week. Optionally narrow "
+            "the date range, then select \u201cShow me the numbers.\u201d"
+        ),
     ),
 )
 
@@ -144,13 +164,12 @@ _ROLE_RANK: Final[Mapping[Role, int]] = {"viewer": 1, "analyst": 2, "admin": 3}
 # --------------------------------------------------------------------------- #
 # streamlit-authenticator wiring
 # --------------------------------------------------------------------------- #
-#
-# Credentials live in app_user. The credential store feeds streamlit-authenticator,
-# so this module does not hard-code password hashes or roles.
+# Credentials live in app_user. The credential store feeds streamlit-authenticator, so this module
+# does not hard-code password hashes or roles.
 
 _COOKIE_NAME: Final[str] = "sales_dashboard_auth"
 _COOKIE_KEY: Final[str] = "capstone-demo-cookie-key-not-a-secret"
-_COOKIE_EXPIRY_DAYS: Final[float] = 1.0
+_COOKIE_EXPIRY_DAYS: Final[float] = 0.0  # No persistent cookies; session ends when browser closes.
 
 
 # --------------------------------------------------------------------------- #
@@ -159,12 +178,10 @@ _COOKIE_EXPIRY_DAYS: Final[float] = 1.0
 
 
 def resolve_actor(role: Role, *, username: str | None = None) -> Actor:
-    """Return an Actor for the chosen role.
+    """Return an Actor for role.
 
-    ``username`` defaults to a role-shaped stand-in when none is supplied
-    (used for the unauthenticated ``viewer`` posture). Authenticated
-    callers pass the streamlit-authenticator username through so it
-    appears verbatim in the audit journal.
+    When username is absent, use a role-shaped local name for the unauthenticated viewer posture.
+    Authenticated sessions pass their username through for audit records.
     """
 
     if role not in _ROLE_RANK:
@@ -173,13 +190,10 @@ def resolve_actor(role: Role, *, username: str | None = None) -> Actor:
 
 
 def tabs_for_role(role: Role) -> tuple[TabDefinition, ...]:
-    """Return all four tab definitions.
+    """Return all tab definitions for role.
 
-    The tab list is always the same four entries regardless of role,
-    because unauthenticated viewers see the Customers tab as
-    ``visible but locked`` (a login prompt instead of the analyses)
-    rather than having it hidden entirely. ``role`` is validated so
-    unknown roles raise instead of silently returning the full list.
+    The tab list is always the same. Roles control whether a tab is open or locked,
+    not whether it is visible.
     """
 
     if role not in _ROLE_RANK:
@@ -188,7 +202,7 @@ def tabs_for_role(role: Role) -> tuple[TabDefinition, ...]:
 
 
 def tab_permitted_for_role(tab: TabDefinition, role: Role) -> bool:
-    """Return True when ``role`` may open any analysis on ``tab``."""
+    """Return whether role may open any analysis on tab."""
 
     if role not in _ROLE_RANK:
         raise ValueError(f"unknown role: {role!r}")
@@ -196,11 +210,9 @@ def tab_permitted_for_role(tab: TabDefinition, role: Role) -> bool:
 
 
 def analyses_for_tab(tab: TabDefinition, role: Role) -> tuple[AnalysisChoice, ...]:
-    """Return the analyses on ``tab`` that ``role`` may open.
+    """Return tab analyses available to role.
 
-    Every analysis on a permitted tab is returned; this function does not
-    hide individual analyses within a permitted tab. Analyses on a locked
-    tab return an empty tuple so callers do not accidentally render them.
+    Locked tabs return an empty tuple.
     """
 
     if not tab_permitted_for_role(tab, role):
@@ -217,20 +229,15 @@ def filter_frame(
     stock_codes: Iterable[str] | None = None,
     segments: Iterable[str] | None = None,
 ) -> pd.DataFrame:
-    """Return a copy of frame filtered by the M2 filter axes.
+    """Return a filtered copy of frame.
 
-    Filter axes are optional and independent:
+    Filter axes are optional and independent. Date filters apply to InvoiceDate, countries
+    to Country, stock_codes to StockCode, and segments to CustomerID values selected from
+    RFM clusters.
 
-    * ``start`` / ``end`` gate InvoiceDate. A None value skips that end
-      of the range.
-    * ``countries`` gates Country to the supplied membership.
-    * ``stock_codes`` gates StockCode to the supplied membership.
-    * ``segments`` gates a CustomerID membership - the caller supplies
-      the CustomerID list that belongs to the selected M4 clusters,
-      because M4 segmentation runs one level up (in the Customers-tab
-      renderer) and the pseudonym membership is already known there.
-
-    Requesting a filter whose column is absent raises ValueError.
+    Raises:
+        TypeError: If frame is not a DataFrame.
+        ValueError: If a requested filter's backing column is missing.
     """
 
     if not isinstance(frame, pd.DataFrame):
@@ -274,12 +281,10 @@ _AnalysisRenderer = Callable[[pd.DataFrame], ExplainedChart]
 
 
 def _render_revenue_summary_kpis(frame: pd.DataFrame) -> ExplainedChart:
-    """Render the top-line revenue picture as a monthly line chart.
+    """Render revenue KPIs using the monthly revenue chart surface.
 
-    The KPI numbers themselves are surfaced via the caption block that
-    accompanies every ExplainedChart, so this renderer reuses the
-    monthly line chart as the figure while still carrying the full
-    revenue_summary payload in its formula and exclusions.
+    The chart carries the revenue_summary payload in its formula and exclusions so the caption
+    can show the KPI context.
     """
 
     return revenue_by_month(time_series(frame), revenue_payload=revenue_summary(frame))
@@ -315,10 +320,9 @@ def dispatch_analysis(
     *,
     settings: Settings,
 ) -> ExplainedChart:
-    """Route an analysis id to the metric + chart pair that renders it.
+    """Route an analysis id to its metric and chart renderer.
 
-    Unknown ids raise ValueError to fail fast rather than silently
-    render an empty surface.
+    Unknown ids raise ValueError.
     """
 
     if analysis_id == "revenue_summary_kpis":
@@ -348,13 +352,10 @@ def _ensure_snapshot(
     *,
     source: Path,
 ) -> str:
-    """Return the id of the most recent snapshot, creating one if needed.
+    """Return the latest snapshot id, creating one from source if needed.
 
-    The bootstrap is idempotent: if any snapshot already exists it is
-    reused. Otherwise the raw source is ingested, cleaned, and
-    pseudonymized in-memory, then persisted as a new snapshot with a
-    timestamp-shaped id. The pipeline audit trail (M9/M10/M6) writes its
-    own events; write_snapshot writes the PROTECTED_STORE_WRITE event.
+    Existing snapshots are reused. When none exist, source is ingested, cleaned, pseudonymized,
+    and stored as a timestamped snapshot.
     """
 
     existing = list_snapshots(settings)
@@ -383,13 +384,7 @@ def _ensure_snapshot(
 
 
 def _resolve_settings() -> Settings:
-    """Return the active Settings, allowing AppTest override.
-
-    Tests that drive the app via ``streamlit.testing.v1.AppTest`` can
-    inject a Settings instance via
-    ``st.session_state['__test_settings_override__']``. Production code
-    goes through ``get_settings``.
-    """
+    """Return active Settings, honoring the AppTest session override."""
 
     override = st.session_state.get("__test_settings_override__")
     if isinstance(override, Settings):
@@ -398,13 +393,7 @@ def _resolve_settings() -> Settings:
 
 
 def _resolve_credential_store(settings: Settings) -> CredentialStore:
-    """Return the CredentialStore, allowing AppTest override.
-
-    Tests that drive the app via ``streamlit.testing.v1.AppTest`` can
-    inject an in-memory store via
-    ``st.session_state['__test_credential_store_override__']``.
-    Production code goes through ``default_store``.
-    """
+    """Return the credential store, honoring the AppTest session override."""
 
     override = st.session_state.get("__test_credential_store_override__")
     if override is not None:
@@ -413,12 +402,12 @@ def _resolve_credential_store(settings: Settings) -> CredentialStore:
 
 
 def _resolve_source(settings: Settings) -> Path:
-    """Return the raw-data source path used for snapshot bootstrap."""
+    """Return the raw data source used for snapshot bootstrap."""
 
     override = st.session_state.get("__test_source_override__")
     if isinstance(override, (str, Path)):
         return Path(override)
-    # Convention: the pipeline writes raw uploads to data/raw/uci_retail.csv.
+    # Prefer a raw upload when present; otherwise fall back to demo.csv.
     raw_dir = Path(settings.data_raw_dir)
     for suffix in (".xlsx", ".csv"):
         candidates = sorted(raw_dir.glob(f"*{suffix}"))
@@ -434,7 +423,7 @@ def _country_options(frame: pd.DataFrame) -> list[str]:
 
 
 def _stock_code_options(frame: pd.DataFrame, *, limit: int = 500) -> list[str]:
-    """Return the StockCodes available for filtering, capped for UI sanity."""
+    """Return StockCodes available for filtering, capped for selector size."""
 
     if "StockCode" not in frame.columns:
         return []
@@ -451,19 +440,94 @@ def _date_bounds(frame: pd.DataFrame) -> tuple[date, date] | None:
     return dates.min().date(), dates.max().date()
 
 
-def _render_caption(chart: ExplainedChart) -> None:
-    """Render an ExplainedChart's caption block below the figure."""
+_CHART_KIND_LABELS: Final[Mapping[ChartKind, str]] = {
+    ChartKind.REVENUE_BY_MONTH: "Monthly revenue",
+    ChartKind.REVENUE_BY_WEEKDAY: "Revenue by weekday",
+    ChartKind.TOP_PRODUCTS_BAR: "Top products",
+    ChartKind.COUNTRY_BAR: "Revenue by country",
+    ChartKind.REPEAT_RATE_GAUGE: "Repeat customer rate",
+    ChartKind.RFM_SCATTER: "Customer segments (RFM)",
+}
 
-    st.markdown(f"**{chart.kind}** ({chart.row_count} rows)")
-    st.markdown(f"**Formula.** {chart.formula}")
+# Per-key sentence templates for chart.exclusions entries that need units or context. Keys not
+# listed here use a generic "Key: value." sentence.
+_EXCLUSION_PHRASES: Final[Mapping[str, str]] = {
+    "adjustments": "{value} adjustment rows were excluded from this result.",
+    "returns_value": "Returns reduced revenue by about {value} in this result.",
+    "lower_ranked_countries": (
+        "{value} smaller countries were grouped out of this chart to keep it readable."
+    ),
+    "unidentified_customers": (
+        "{value} orders came from customers who could not be identified, so they "
+        "are not counted as repeat business."
+    ),
+    "small_group_clusters": "{value} clusters were too small to display and were excluded.",
+    "clusters_rendered": "{value} customer segments are shown in this chart.",
+}
+
+# RFM stability metadata is already narrated in chart.formula, so these raw keys are omitted from
+# the exclusions sentence.
+_EXCLUSION_KEYS_NARRATED_IN_FORMULA: Final[frozenset[str]] = frozenset(
+    {"stability_score", "stability_flag", "stability_holdout_size", "stability_reason"}
+)
+
+# Keys where a falsy value adds caption noise rather than useful context.
+_EXCLUSION_KEYS_SKIPPED_WHEN_ZERO: Final[frozenset[str]] = frozenset(
+    {
+        "adjustments",
+        "returns_value",
+        "lower_ranked_countries",
+        "unidentified_customers",
+        "small_group_clusters",
+    }
+)
+
+
+def _humanize_key(key: str) -> str:
+    """Return a readable phrase for a snake_case key."""
+
+    words = key.replace("_", " ")
+    return words[:1].upper() + words[1:]
+
+
+def _describe_filters(filters: Mapping[str, str]) -> str:
+    """Return readable sentences for chart filters.
+
+    Filter values are already verb phrases, so each sentence pairs a
+    humanized key with its value.
+    """
+
+    return " ".join(f"{_humanize_key(name)} {value}." for name, value in filters.items())
+
+
+def _describe_exclusions(exclusions: Mapping[str, object]) -> str:
+    """Return readable sentences for chart exclusions."""
+
+    sentences: list[str] = []
+    for key, value in exclusions.items():
+        if key in _EXCLUSION_KEYS_NARRATED_IN_FORMULA:
+            continue
+        if key in _EXCLUSION_KEYS_SKIPPED_WHEN_ZERO and not value:
+            continue
+        template = _EXCLUSION_PHRASES.get(key)
+        if template is not None:
+            sentences.append(template.format(value=value))
+        else:
+            sentences.append(f"{_humanize_key(key)}: {value}.")
+    return " ".join(sentences)
+
+
+def _render_caption(chart: ExplainedChart) -> None:
+    """Render an ExplainedChart caption below its figure."""
+
+    label = _CHART_KIND_LABELS.get(chart.kind, _humanize_key(chart.kind.value))
+    st.markdown(f"**{label}** \u2014 {chart.row_count} rows shown.")
+    st.markdown(f"**How this is calculated.** {chart.formula}")
     if chart.filters:
-        filter_lines = "; ".join(f"{name}: {value}" for name, value in chart.filters.items())
-        st.markdown(f"**Filters.** {filter_lines}")
-    if chart.exclusions:
-        exclusion_lines = "; ".join(
-            f"{cause}: {count}" for cause, count in chart.exclusions.items()
-        )
-        st.markdown(f"**Exclusions.** {exclusion_lines}")
+        st.markdown(f"**What is filtered.** {_describe_filters(chart.filters)}")
+    exclusion_text = _describe_exclusions(chart.exclusions) if chart.exclusions else ""
+    if exclusion_text:
+        st.markdown(f"**What is left out.** {exclusion_text}")
 
 
 # --------------------------------------------------------------------------- #
@@ -475,10 +539,9 @@ def _authenticate(  # pragma: no cover - Streamlit widget wiring
     authenticator: stauth.Authenticate,
     store: CredentialStore,
 ) -> tuple[Role, str | None]:
-    """Render the sidebar login widget and return (role, username).
+    """Render the sidebar login widget and return role and username.
 
-    Unauthenticated visitors are returned as ``("viewer", None)`` so
-    they still receive the aggregate-safe posture enforced by M7/M8.
+    Unauthenticated visitors use the viewer role.
     """
 
     authenticator.login(location="sidebar")
@@ -511,7 +574,9 @@ def _render_tab(  # pragma: no cover - Streamlit rendering path
     settings: Settings,
     snapshot_id: str,
 ) -> None:
-    """Render one of the four analytical tabs."""
+    """Render one dashboard tab."""
+
+    st.caption(tab.description)
 
     if not tab_permitted_for_role(tab, role):
         st.info(
@@ -525,18 +590,23 @@ def _render_tab(  # pragma: no cover - Streamlit rendering path
         st.warning("No analyses are available on this tab for the current role.")
         return
 
-    # Preview under the widest role so the filter widgets always see the
-    # full domain, independent of whether the caller happens to be viewer.
+    # Use the widest role for filter options so controls show the full domain.
     preview_actor = resolve_actor("admin")
     try:
         preview = read_view(tab.key, preview_actor, settings, snapshot_id=snapshot_id)
     except StorageError:
         preview = pd.DataFrame()
 
-    bounds = _date_bounds(preview)
-    country_options = _country_options(preview)
-    stock_options = _stock_code_options(preview)
+    # Render filters only when this view includes their backing columns.
+    # Otherwise a user could select a filter that filter_frame would reject.
+    has_date = "InvoiceDate" in preview.columns
+    has_country = "Country" in preview.columns
+    has_stock_code = "StockCode" in preview.columns
     show_segment_filter = tab.key == "customers"
+
+    bounds = _date_bounds(preview) if has_date else None
+    country_options = _country_options(preview) if has_country else []
+    stock_options = _stock_code_options(preview) if has_stock_code else []
 
     form_key = f"controls_{tab.key}"
     with st.form(form_key):
@@ -548,40 +618,50 @@ def _render_tab(  # pragma: no cover - Streamlit rendering path
         )
         chosen = next(a for a in analyses if a.label == analysis_label)
 
-        col1, col2 = st.columns(2)
-        with col1:
-            start = st.date_input(
-                "Start date",
-                value=bounds[0] if bounds else None,
-                min_value=bounds[0] if bounds else None,
-                max_value=bounds[1] if bounds else None,
-                key=f"start_{tab.key}",
+        start: date | None = None
+        end: date | None = None
+        if has_date:
+            col1, col2 = st.columns(2)
+            with col1:
+                start = st.date_input(
+                    "Start date",
+                    value=bounds[0] if bounds else None,
+                    min_value=bounds[0] if bounds else None,
+                    max_value=bounds[1] if bounds else None,
+                    key=f"start_{tab.key}",
+                )
+            with col2:
+                end = st.date_input(
+                    "End date",
+                    value=bounds[1] if bounds else None,
+                    min_value=bounds[0] if bounds else None,
+                    max_value=bounds[1] if bounds else None,
+                    key=f"end_{tab.key}",
+                )
+
+        countries: list[str] = []
+        if has_country:
+            countries = st.multiselect(
+                "Countries (blank = all)",
+                options=country_options,
+                default=[],
+                key=f"countries_{tab.key}",
             )
-        with col2:
-            end = st.date_input(
-                "End date",
-                value=bounds[1] if bounds else None,
-                min_value=bounds[0] if bounds else None,
-                max_value=bounds[1] if bounds else None,
-                key=f"end_{tab.key}",
+
+        stock_codes: list[str] = []
+        if has_stock_code:
+            stock_codes = st.multiselect(
+                "Products / StockCodes (blank = all)",
+                options=stock_options,
+                default=[],
+                key=f"products_{tab.key}",
+                help=(
+                    "Up to 500 StockCodes are listed; leave blank for all "
+                    "products. StockCode-level detail matches the values in "
+                    "the cleaned UCI Online Retail dataset."
+                ),
             )
-        countries = st.multiselect(
-            "Countries (blank = all)",
-            options=country_options,
-            default=[],
-            key=f"countries_{tab.key}",
-        )
-        stock_codes = st.multiselect(
-            "Products / StockCodes (blank = all)",
-            options=stock_options,
-            default=[],
-            key=f"products_{tab.key}",
-            help=(
-                "Up to 500 StockCodes are listed; leave blank for all "
-                "products. StockCode-level detail matches the values in "
-                "the cleaned UCI Online Retail dataset."
-            ),
-        )
+
         segments: list[str] = []
         if show_segment_filter:
             segments = _customer_segment_options(
@@ -678,7 +758,7 @@ def _customer_segment_options(  # pragma: no cover - depends on live snapshot
 
 
 def _run_app() -> None:  # pragma: no cover - Streamlit entry point
-    """Render the M1 UI. Excluded from coverage per pyproject.toml."""
+    """Render the M1 UI."""
 
     st.set_page_config(
         page_title="Interactive Sales Analytics Dashboard",
@@ -686,11 +766,7 @@ def _run_app() -> None:  # pragma: no cover - Streamlit entry point
         layout="wide",
     )
     st.title("Interactive Sales Analytics Dashboard")
-    st.caption(
-        "MSIT 5910 Capstone - Rev. Drew Brown. Analytics from M3/M4, "
-        "charts from M5, access control from M7/M8, authentication "
-        "from streamlit-authenticator."
-    )
+    st.caption("MSIT 5910 Capstone - Rev. Drew Brown.")
 
     settings = _resolve_settings()
 
