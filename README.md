@@ -87,12 +87,21 @@ sales-analytics-dashboard/
 ├── .github/workflows/ci.yml
 ├── .env.example
 ├── .gitignore
+├── .dockerignore          # M13 — keeps secrets and local state out of the image
+├── Dockerfile             # M13 — production container image
+├── docker-compose.yml     # M13 — one-command containerized run
 ├── requirements.txt
 ├── requirements-dev.txt
 ├── pyproject.toml
 ├── LICENSE
 └── README.md
 ```
+
+The image contains only `src/` and the pinned dependencies. Configuration
+enters through `.env` at runtime and is never baked into the image, the raw
+dataset mounts read-only, and encrypted snapshots, the audit database, and
+logs persist in named volumes across container replacements. Rolling back is
+re-running the previous image tag (e.g., `sales-analytics-dashboard:v1.0.0`).
 
 ## Quickstart
 
@@ -123,6 +132,23 @@ cp .env.example .env
 # 6. Run the dashboard
 streamlit run src/app.py
 # Defaults to http://localhost:8501
+```
+
+## Running with Docker
+
+```bash
+# 1. Configure secrets (same as Quickstart step 4)
+cp .env.example .env
+# Edit .env: set PSEUDONYM_KEY (32 bytes hex).
+# Generate with: python -c "import secrets; print(secrets.token_hex(32))"
+
+# 2. Provide the input file
+# Drop "Online Retail.xlsx" (or a conforming .csv/.xlsx) into data/raw/.
+
+# 3. Build and start
+docker compose up --build
+# Dashboard at http://localhost:8501; wait for the container to report
+# healthy in `docker ps`.
 ```
 
 ## Input Data

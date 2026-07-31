@@ -1,0 +1,17 @@
+# Never copy secrets or local state into the image.
+.env
+.git
+.github
+.venv
+venv
+data
+logs
+notebooks
+docs
+tests
+htmlcov
+.pytest_cache
+__pycache__
+*.pyc
+.coverage
+*.md

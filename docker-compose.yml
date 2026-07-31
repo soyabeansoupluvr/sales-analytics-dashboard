@@ -1,0 +1,23 @@
+services:
+  dashboard:
+    build: .
+    image: sales-analytics-dashboard:latest
+    ports:
+      - "8501:8501"
+    # PSEUDONYM_KEY and tuning come from .env at runtime, never baked
+    # into the image. Generate the key as documented in .env.example.
+    env_file:
+      - .env
+    environment:
+      # .env sets localhost for bare-metal runs; inside the container
+      # Streamlit must bind all interfaces. environment beats env_file.
+      STREAMLIT_SERVER_ADDRESS: 0.0.0.0
+    volumes:
+      - ./data/raw:/app/data/raw:ro        # source dataset, read-only
+      - processed:/app/data/processed      # encrypted snapshots + audit DB
+      - logs:/app/logs
+    restart: unless-stopped
+
+volumes:
+  processed:
+  logs:
