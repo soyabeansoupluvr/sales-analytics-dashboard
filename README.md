@@ -90,6 +90,7 @@ sales-analytics-dashboard/
 ├── .dockerignore          # M13 — keeps secrets and local state out of the image
 ├── Dockerfile             # M13 — production container image
 ├── docker-compose.yml     # M13 — one-command containerized run
+├── system_test.py         # System and acceptance tests
 ├── requirements.txt
 ├── requirements-dev.txt
 ├── pyproject.toml
