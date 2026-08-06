@@ -6,7 +6,7 @@ pseudonymizes customer identifiers, computes RFM-based customer segments, and
 presents role-scoped, ethics- and security-by-design KPI dashboards for
 small-business owners, retail analysts, and administrators.
 
-**MSIT 5290: Capstone Project — University of the People**
+**MSIT 5910: Capstone Project — University of the People**
 Author: Rev. Drew Brown
 Instructor: Dr. Sirisha Pavuluri
 Term: July 2026
@@ -210,4 +210,4 @@ MIT — see [`LICENSE`](LICENSE).
 
 ## Author
 
-Rev. Drew Brown — MSIT 5290 Capstone, University of the People, July 2026.
+Rev. Drew Brown — MSIT 5910 Capstone, University of the People, July 2026.
