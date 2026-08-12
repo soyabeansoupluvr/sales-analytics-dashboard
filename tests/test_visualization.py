@@ -22,6 +22,7 @@ from src.visualization import (
     ChartKind,
     ExplainedChart,
     VisualizationError,
+    revenue_summary_kpis,
     country_bar,
     repeat_rate_gauge,
     revenue_by_month,
@@ -136,6 +137,47 @@ def rfm_frame() -> pd.DataFrame:
             "stability_reason": [""] * 12,
         }
     )
+
+
+# --------------------------------------------------------------------------- #
+# revenue_summary_kpis
+# --------------------------------------------------------------------------- #
+
+
+def test_revenue_summary_kpis_returns_explained_chart(sample_frame: pd.DataFrame) -> None:
+    payload = revenue_summary(sample_frame)
+    chart = revenue_summary_kpis(payload)
+    assert isinstance(chart, ExplainedChart)
+    assert chart.kind is ChartKind.REVENUE_SUMMARY_KPIS
+    assert isinstance(chart.figure, go.Figure)
+    # One number indicator per KPI card (gross revenue, net revenue, orders, AOV).
+    assert len(chart.figure.data) == 4
+    assert chart.row_count == payload["orders"]
+
+
+def test_revenue_summary_kpis_is_distinct_from_revenue_by_month(
+    sample_frame: pd.DataFrame,
+) -> None:
+    """Regression guard: the Revenue tab's summary must not silently become the
+    Time trends tab's monthly line chart again (see app.py history).
+    """
+
+    summary_chart = revenue_summary_kpis(revenue_summary(sample_frame))
+    trend_chart = revenue_by_month(time_series(sample_frame))
+    assert summary_chart.kind is not trend_chart.kind
+
+
+def test_revenue_summary_kpis_uses_payload_for_exclusions(sample_frame: pd.DataFrame) -> None:
+    payload = revenue_summary(sample_frame)
+    chart = revenue_summary_kpis(payload)
+    # sample_frame has 1 adjustment row and 1 return (returns_value = -40).
+    assert chart.exclusions["adjustments"] == 1
+    assert chart.exclusions["returns_value"] == -40
+
+
+def test_revenue_summary_kpis_rejects_bad_payload() -> None:
+    with pytest.raises(VisualizationError, match="missing required key"):
+        revenue_summary_kpis({"gross_revenue": 100.0})
 
 
 # --------------------------------------------------------------------------- #

@@ -59,6 +59,7 @@ from src.storage import StorageError, list_snapshots, read_view, write_snapshot
 from src.visualization import (
     ChartKind,
     ExplainedChart,
+    revenue_summary_kpis,
     country_bar,
     repeat_rate_gauge,
     revenue_by_month,
@@ -287,7 +288,7 @@ def _render_revenue_summary_kpis(frame: pd.DataFrame) -> ExplainedChart:
     can show the KPI context.
     """
 
-    return revenue_by_month(time_series(frame), revenue_payload=revenue_summary(frame))
+    return revenue_summary_kpis(revenue_summary(frame))
 
 
 def _render_revenue_by_month(frame: pd.DataFrame) -> ExplainedChart:
@@ -441,6 +442,7 @@ def _date_bounds(frame: pd.DataFrame) -> tuple[date, date] | None:
 
 
 _CHART_KIND_LABELS: Final[Mapping[ChartKind, str]] = {
+    ChartKind.REVENUE_SUMMARY_KPIS: "Revenue summary",
     ChartKind.REVENUE_BY_MONTH: "Monthly revenue",
     ChartKind.REVENUE_BY_WEEKDAY: "Revenue by weekday",
     ChartKind.TOP_PRODUCTS_BAR: "Top products",

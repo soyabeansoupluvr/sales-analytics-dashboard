@@ -35,6 +35,7 @@ class ChartKind(str, Enum):
     Inherits from str so chart types serialize cleanly without manually unwrapping .value.
     """
 
+    REVENUE_SUMMARY_KPIS = "revenue_summary_kpis"
     REVENUE_BY_MONTH = "revenue_by_month"
     REVENUE_BY_WEEKDAY = "revenue_by_weekday"
     TOP_PRODUCTS_BAR = "top_products_bar"
@@ -92,6 +93,57 @@ _TEMPLATE: Final[str] = "plotly_white"
 # --------------------------------------------------------------------------- #
 # Chart helpers - one per M3/M4 surface
 # --------------------------------------------------------------------------- #
+
+
+def revenue_summary_kpis(revenue_payload: Mapping[str, Any]) -> ExplainedChart:
+    """Render the headline revenue KPIs as a row of Plotly number indicators."""
+
+    _require_keys(
+        revenue_payload,
+        {"gross_revenue", "net_revenue", "orders", "aov"},
+        "revenue_summary",
+    )
+
+    gross_revenue = float(revenue_payload["gross_revenue"])
+    net_revenue = float(revenue_payload["net_revenue"])
+    orders = int(revenue_payload["orders"])
+    aov = revenue_payload["aov"]
+
+    cards = (
+        ("Gross revenue", gross_revenue, "$", ",.2f"),
+        ("Net revenue", net_revenue, "$", ",.2f"),
+        ("Orders", float(orders), "", ","),
+        ("Average order value", 0.0 if aov is None else float(aov), "$", ",.2f"),
+    )
+    figure = go.Figure()
+    for index, (title, value, prefix, number_format) in enumerate(cards):
+        figure.add_trace(
+            go.Indicator(
+                mode="number",
+                value=value,
+                number={"prefix": prefix, "valueformat": number_format, "font": {"size": 32}},
+                title={"text": title, "font": {"size": 14}},
+                domain={"row": 0, "column": index},
+            )
+        )
+    figure.update_layout(
+        template=_TEMPLATE,
+        grid={"rows": 1, "columns": len(cards), "pattern": "independent"},
+        margin=dict(l=20, r=20, t=60, b=20),
+        height=200,
+    )
+    return ExplainedChart(
+        kind=ChartKind.REVENUE_SUMMARY_KPIS,
+        figure=figure,
+        formula=(
+            "Gross revenue is the sum of Revenue on positive (non-return) orders. Net revenue "
+            "adds return rows back in. Average order value is gross revenue divided by the "
+            "number of distinct positive orders."
+        ),
+        filters={"adjustments": "excluded"},
+        exclusions=_revenue_exclusions(revenue_payload),
+        row_count=orders,
+    )
 
 
 def revenue_by_month(
