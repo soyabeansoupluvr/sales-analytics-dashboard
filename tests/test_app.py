@@ -418,6 +418,16 @@ class TestDispatchAnalysis:
         chart = dispatch_analysis("customer_segments", cleaned_frame, settings=settings)
         assert isinstance(chart, ExplainedChart)
 
+    def test_revenue_summary_kpis_is_not_the_monthly_trend_chart(
+        self, cleaned_frame: pd.DataFrame, settings: Settings
+    ) -> None:
+        """Regression guard for the Revenue tab reusing the Time trends monthly chart."""
+
+        summary = dispatch_analysis("revenue_summary_kpis", cleaned_frame, settings=settings)
+        trend = dispatch_analysis("revenue_by_month", cleaned_frame, settings=settings)
+        assert summary.kind is ChartKind.REVENUE_SUMMARY_KPIS
+        assert summary.kind is not trend.kind
+
 
 class TestHumanizeKey:
     def test_replaces_underscores_and_capitalizes(self) -> None:
